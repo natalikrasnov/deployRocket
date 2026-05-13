@@ -23,11 +23,11 @@ export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.2",
   openaiCodexModel: process.env.OPENAI_CODEX_MODEL ?? "gpt-5.2-codex",
-  githubClientId: process.env.GITHUB_CLIENT_ID ?? "",
-  githubClientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
+  githubClientId: process.env.GITHUB_CLIENT_ID?.trim() ?? "",
+  githubClientSecret: process.env.GITHUB_CLIENT_SECRET?.trim() ?? "",
   githubCallbackUrl:
-    process.env.GITHUB_CALLBACK_URL ?? "http://localhost:3000/auth/github/callback",
-  sessionSecret: process.env.SESSION_SECRET ?? "replace-this-session-secret",
+    process.env.GITHUB_CALLBACK_URL?.trim() || "http://localhost:3000/auth/github/callback",
+  sessionSecret: process.env.SESSION_SECRET?.trim() || "replace-this-session-secret",
   githubDefaultBranch: process.env.GITHUB_DEFAULT_BRANCH ?? "main",
   isProduction: process.env.NODE_ENV === "production"
 };

@@ -10,7 +10,7 @@ This is not a chat app. The chat-like composer is only used to create or edit st
 - Processes raw input into structured software requirements with OpenAI.
 - Builds a Codex implementation prompt.
 - Uses a Codex coding model through the OpenAI Responses API to generate real project files.
-- Creates or updates a GitHub repository through OAuth.
+- Creates or updates a GitHub repository in the connected customer GitHub account through OAuth.
 - Commits generated files to GitHub.
 - Configures GitHub Pages with a GitHub Actions deployment workflow.
 - Polls real GitHub Actions and Pages state until the project is live or failed.
@@ -26,7 +26,7 @@ There is no mock mode and no fake status path. Missing credentials, invalid toke
 - TailwindCSS
 - Express
 - Local JSON persistence
-- GitHub OAuth
+- GitHub OAuth with per-session customer authorization
 - OpenAI Responses API with a Codex coding model
 - GitHub REST API and GitHub Pages Actions deployment
 
@@ -45,7 +45,7 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `.env` before creating projects.
+Fill in `.env` before creating projects. Do not commit `.env`; the committed `.env.example` only documents the required settings.
 
 ## Environment Variables
 
@@ -54,6 +54,9 @@ PORT=3000
 
 OPENAI_API_KEY=
 
+# GitHub OAuth app credentials for this deployRocket installation.
+# These identify the app, not the customer's GitHub account.
+# Each customer connects and deploys with their own GitHub account.
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
@@ -79,13 +82,15 @@ OPENAI_CODEX_MODEL=gpt-5.2-codex
 5. Copy the client ID and client secret into `.env`.
 6. Set `SESSION_SECRET` to a long random value.
 
+The OAuth app credentials are infrastructure configuration for the deployRocket installation. They are not your personal deployment target, and they should never be committed. When a customer clicks Connect GitHub, GitHub issues an access token for that customer session; repositories, commits, Actions, and Pages deployments are created in that connected customer account.
+
 The app requests these OAuth scopes:
 
 - `repo`
 - `workflow`
 - `user:email`
 
-The repository is created as public by default so GitHub Pages can deploy without requiring a paid private Pages setup.
+The repository is created in the connected customer account. It is public by default so GitHub Pages can deploy without requiring a paid private Pages setup.
 
 ## GitHub Pages Setup
 
@@ -154,7 +159,7 @@ data/generated/
 uploads/
 ```
 
-These paths are ignored by git. Existing projects persist after backend restart. If the backend restarts during an active run, the app marks the interrupted project as `STOPPED` with a readable action history entry.
+These paths are ignored by git. GitHub OAuth tokens are stored per browser session in `data/auth.json`; one customer session does not become the global GitHub account for every user. Existing projects persist after backend restart. If the backend restarts during an active run, the app marks the interrupted project as `STOPPED` with a readable action history entry.
 
 ## Project Lifecycle
 

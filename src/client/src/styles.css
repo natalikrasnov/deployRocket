@@ -6,7 +6,7 @@
   color-scheme: dark;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #080806;
+  background: #05080f;
 }
 
 * {
@@ -17,10 +17,10 @@ body {
   margin: 0;
   min-width: 320px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(155deg, #080806 0%, #17110c 44%, #071518 100%);
-  background-size: 30px 30px, 30px 30px, 100% 100%;
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(155deg, #05080f 0%, #0a0b18 44%, #0f172a 100%);
+  background-size: 40px 40px, 40px 40px, 100% 100%;
 }
 
 button,
@@ -34,7 +34,7 @@ button:focus-visible,
 a:focus-visible,
 textarea:focus-visible,
 input:focus-visible {
-  outline: 2px solid rgba(251, 146, 60, 0.9);
+  outline: 2px solid rgba(34, 211, 238, 0.8);
   outline-offset: 2px;
 }
 

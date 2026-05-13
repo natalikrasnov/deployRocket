@@ -107,6 +107,7 @@ export interface Project {
   githubPagesUrl?: string;
   githubOwner?: string;
   githubRepo?: string;
+  githubUserLogin?: string;
   githubDefaultBranch?: string;
   githubLastCommitSha?: string;
   githubWorkflowRunId?: number;

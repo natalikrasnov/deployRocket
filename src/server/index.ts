@@ -58,26 +58,26 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, at: nowIso() });
 });
 
-app.get("/api/setup", async (_req, res, next) => {
+app.get("/api/setup", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus());
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/auth/github", async (_req, res, next) => {
+app.get("/api/auth/github", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus());
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/api/auth/github/disconnect", async (_req, res, next) => {
+app.post("/api/auth/github/disconnect", async (req, res, next) => {
   try {
-    await githubManager.disconnect();
-    res.json(await githubManager.getSetupStatus());
+    await githubManager.disconnect(githubSessionIdFrom(req));
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
   } catch (error) {
     next(error);
   }
@@ -114,7 +114,7 @@ app.get("/auth/github/callback", async (req, res, next) => {
       });
     }
 
-    await githubManager.exchangeCode(code);
+    await githubManager.exchangeCode(githubSessionIdFrom(req), code);
     delete (req.session as typeof req.session & { githubOauthState?: string }).githubOauthState;
     res.redirect(frontendRedirect("?github=connected"));
   } catch (error) {
@@ -138,7 +138,7 @@ app.post("/api/projects", upload.array("images", 4), async (req, res, next) => {
   try {
     const input = buildInputRecord("create", req);
     const project = await projectStore.createProject(input);
-    orchestrator.start(project.id, input.id, "create");
+    orchestrator.start(project.id, input.id, "create", githubSessionIdFrom(req));
     res.status(202).json(await projectStore.getProject(project.id));
   } catch (error) {
     next(error);
@@ -175,7 +175,7 @@ app.post("/api/projects/:id/edit", upload.array("images", 4), async (req, res, n
 
     const input = buildInputRecord("edit", req);
     await projectStore.addInput(project.id, input);
-    orchestrator.start(project.id, input.id, "edit");
+    orchestrator.start(project.id, input.id, "edit", githubSessionIdFrom(req));
     res.status(202).json(await projectStore.getProject(project.id));
   } catch (error) {
     next(error);
@@ -197,7 +197,7 @@ app.post("/api/projects/:id/refresh", async (req, res, next) => {
   try {
     const project = await projectStore.getProject(projectIdFrom(req));
     if (!project) throw notFound();
-    const refreshed = await orchestrator.refreshDeployment(project.id);
+    const refreshed = await orchestrator.refreshDeployment(project.id, githubSessionIdFrom(req));
     res.json(refreshed);
   } catch (error) {
     next(error);
@@ -280,6 +280,10 @@ function projectIdFrom(req: Request) {
   return String(req.params.id);
 }
 
+function githubSessionIdFrom(req: Request) {
+  return req.sessionID;
+}
+
 function frontendRedirect(query = "") {
   if (fs.existsSync(path.join(paths.clientDistDir, "index.html"))) {
     return `/${query}`;
@@ -297,7 +301,10 @@ function startStatusPoller() {
         !orchestrator.isActive(project.id)
       ) {
         try {
-          await pagesDeployManager.pollProject(project);
+          if (!project.githubUserLogin) continue;
+          const githubSessionId = await githubManager.findSessionIdForUser(project.githubUserLogin);
+          if (!githubSessionId) continue;
+          await pagesDeployManager.pollProject(project, githubSessionId);
         } catch (error) {
           const readable = toReadableError(error);
           const projectError: ProjectError = {

@@ -16,12 +16,13 @@ interface ActiveRun {
   inputId: string;
   kind: "create" | "edit";
   startedAt: string;
+  githubSessionId: string;
 }
 
 export class Orchestrator {
   private activeRuns = new Map<string, ActiveRun>();
 
-  start(projectId: string, inputId: string, kind: "create" | "edit") {
+  start(projectId: string, inputId: string, kind: "create" | "edit", githubSessionId: string) {
     if (this.activeRuns.has(projectId)) {
       throw new AppError("Project is already running.", {
         statusCode: 409,
@@ -34,10 +35,11 @@ export class Orchestrator {
       controller,
       inputId,
       kind,
-      startedAt: nowIso()
+      startedAt: nowIso(),
+      githubSessionId
     });
 
-    void this.run(projectId, inputId, kind, controller.signal).finally(() => {
+    void this.run(projectId, inputId, kind, githubSessionId, controller.signal).finally(() => {
       this.activeRuns.delete(projectId);
     });
   }
@@ -52,7 +54,7 @@ export class Orchestrator {
     return this.activeRuns.has(projectId);
   }
 
-  async refreshDeployment(projectId: string) {
+  async refreshDeployment(projectId: string, githubSessionId: string) {
     const project = await projectStore.getProject(projectId);
     if (!project) {
       throw new AppError("Project not found.", {
@@ -66,7 +68,14 @@ export class Orchestrator {
     }
 
     const controller = new AbortController();
-    await pagesDeployManager.pollProject(project, controller.signal);
+    const github = await githubManager.ensureAuthenticated(githubSessionId, controller.signal);
+    if (project.githubUserLogin && project.githubUserLogin !== github.user.login) {
+      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before refreshing deployment status.`, {
+        statusCode: 403,
+        code: "GITHUB_ACCOUNT_MISMATCH"
+      });
+    }
+    await pagesDeployManager.pollProject(project, githubSessionId, controller.signal);
     return projectStore.getProject(projectId);
   }
 
@@ -74,10 +83,11 @@ export class Orchestrator {
     projectId: string,
     inputId: string,
     kind: "create" | "edit",
+    githubSessionId: string,
     signal: AbortSignal
   ) {
     try {
-      await this.ensureSetup(signal);
+      await this.ensureSetup(projectId, githubSessionId, signal);
 
       await projectStore.setStatus(
         projectId,
@@ -171,6 +181,7 @@ export class Orchestrator {
       const repository = await githubManager.ensureRepository(
         currentProject,
         requirements.repositoryNameSuggestion,
+        githubSessionId,
         signal
       );
       await this.throwIfStopped(projectId, signal);
@@ -192,6 +203,7 @@ export class Orchestrator {
           kind === "create"
             ? "Create project from deployRocket"
             : "Update project from deployRocket",
+        sessionId: githubSessionId,
         signal
       });
       await this.throwIfStopped(projectId, signal);
@@ -209,13 +221,14 @@ export class Orchestrator {
         "GitHub Pages deployment started"
       );
 
-      await githubManager.enablePages(repository.owner, repository.repo, signal);
+      await githubManager.enablePages(repository.owner, repository.repo, githubSessionId, signal);
       await projectStore.addAction(projectId, "GitHub Pages configured for workflow deployment", "success");
 
       const dispatched = await githubManager.dispatchPagesWorkflow(
         repository.owner,
         repository.repo,
         repository.branch,
+        githubSessionId,
         signal
       );
       await projectStore.addAction(
@@ -226,7 +239,7 @@ export class Orchestrator {
         "info"
       );
 
-      await this.monitorDeployment(projectId, signal);
+      await this.monitorDeployment(projectId, githubSessionId, signal);
     } catch (error) {
       const latest = await projectStore.getProject(projectId);
       if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
@@ -248,8 +261,8 @@ export class Orchestrator {
     }
   }
 
-  private async ensureSetup(signal: AbortSignal) {
-    const status = await githubManager.getSetupStatus();
+  private async ensureSetup(projectId: string, githubSessionId: string, signal: AbortSignal) {
+    const status = await githubManager.getSetupStatus(githubSessionId);
 
     if (!status.openaiConfigured) {
       throw new AppError("OpenAI is not configured.", {
@@ -275,14 +288,26 @@ export class Orchestrator {
       });
     }
 
-    await githubManager.ensureAuthenticated(signal);
+    const github = await githubManager.ensureAuthenticated(githubSessionId, signal);
+    const project = await this.requireProject(projectId);
+
+    if (project.githubUserLogin && project.githubUserLogin !== github.user.login) {
+      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before editing or deploying it.`, {
+        statusCode: 403,
+        code: "GITHUB_ACCOUNT_MISMATCH"
+      });
+    }
+
+    await projectStore.updateProject(projectId, (current) => {
+      current.githubUserLogin = github.user.login;
+    });
   }
 
-  private async monitorDeployment(projectId: string, signal: AbortSignal) {
+  private async monitorDeployment(projectId: string, githubSessionId: string, signal: AbortSignal) {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       await this.throwIfStopped(projectId, signal);
       const project = await this.requireProject(projectId);
-      const result = await pagesDeployManager.pollProject(project, signal);
+      const result = await pagesDeployManager.pollProject(project, githubSessionId, signal);
       if (result.done) return;
       await sleep(5000, signal);
     }

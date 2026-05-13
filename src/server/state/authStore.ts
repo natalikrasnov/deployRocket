@@ -16,7 +16,12 @@ export interface GitHubAuthState {
 }
 
 interface AuthDatabase {
-  github: GitHubAuthState | null;
+  githubBySession: Record<string, GitHubAuthState>;
+}
+
+interface LegacyAuthDatabase {
+  github?: GitHubAuthState | null;
+  githubBySession?: Record<string, GitHubAuthState>;
 }
 
 const authPath = path.join(paths.dataDir, "auth.json");
@@ -26,7 +31,7 @@ function clone<T>(value: T): T {
 }
 
 class AuthStore {
-  private db: AuthDatabase = { github: null };
+  private db: AuthDatabase = { githubBySession: {} };
   private ready: Promise<void>;
   private writeQueue = Promise.resolve();
 
@@ -37,11 +42,11 @@ class AuthStore {
   private async load() {
     try {
       const raw = await fs.readFile(authPath, "utf8");
-      const parsed = JSON.parse(raw) as AuthDatabase;
-      this.db = { github: parsed.github ?? null };
+      const parsed = JSON.parse(raw) as LegacyAuthDatabase;
+      this.db = { githubBySession: parsed.githubBySession ?? {} };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      this.db = { github: null };
+      this.db = { githubBySession: {} };
     }
     await this.write();
   }
@@ -69,21 +74,31 @@ class AuthStore {
     return next;
   }
 
-  async getGithub() {
+  async getGithub(sessionId: string) {
     await this.ready;
-    return this.db.github ? clone(this.db.github) : null;
+    const github = this.db.githubBySession[sessionId];
+    return github ? clone(github) : null;
   }
 
-  async setGithub(github: GitHubAuthState) {
+  async findSessionIdForUser(login: string) {
+    await this.ready;
+    const normalizedLogin = login.toLowerCase();
+    const match = Object.entries(this.db.githubBySession).find(
+      ([, github]) => github.user.login.toLowerCase() === normalizedLogin
+    );
+    return match?.[0] ?? null;
+  }
+
+  async setGithub(sessionId: string, github: GitHubAuthState) {
     return this.mutate(() => {
-      this.db.github = github;
-      return this.db.github;
+      this.db.githubBySession[sessionId] = github;
+      return this.db.githubBySession[sessionId];
     });
   }
 
-  async clearGithub() {
+  async clearGithub(sessionId: string) {
     return this.mutate(() => {
-      this.db.github = null;
+      delete this.db.githubBySession[sessionId];
       return true;
     });
   }

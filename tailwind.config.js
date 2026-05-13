@@ -7,7 +7,9 @@ export default {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"]
       },
       boxShadow: {
-        glow: "0 0 38px rgba(251, 146, 60, 0.18), 0 0 18px rgba(34, 211, 238, 0.1)"
+        glow: "0 0 38px rgba(34, 211, 238, 0.15), 0 0 18px rgba(168, 85, 247, 0.1)",
+        "glow-cyan": "0 0 25px rgba(34, 211, 238, 0.2)",
+        "glow-purple": "0 0 25px rgba(168, 85, 247, 0.2)"
       }
     }
   },

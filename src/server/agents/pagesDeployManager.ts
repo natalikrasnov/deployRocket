@@ -5,7 +5,7 @@ import { projectStore } from "../state/projectStore.js";
 import type { Project } from "../../shared/types.js";
 
 export class PagesDeployManager {
-  async pollProject(project: Project, signal?: AbortSignal) {
+  async pollProject(project: Project, githubSessionId: string, signal?: AbortSignal) {
     if (!project.githubOwner || !project.githubRepo) {
       throw new AppError("Project has no GitHub repository to deploy.", {
         statusCode: 409,
@@ -18,6 +18,7 @@ export class PagesDeployManager {
       project.githubOwner,
       project.githubRepo,
       branch,
+      githubSessionId,
       signal
     );
 
@@ -49,7 +50,7 @@ export class PagesDeployManager {
     }
 
     if (run.conclusion === "success") {
-      const pages = await githubManager.getPages(project.githubOwner, project.githubRepo, signal);
+      const pages = await githubManager.getPages(project.githubOwner, project.githubRepo, githubSessionId, signal);
       const pagesUrl =
         pages?.html_url ??
         `https://${project.githubOwner}.github.io/${project.githubRepo}/`;

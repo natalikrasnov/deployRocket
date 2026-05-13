@@ -1,4 +1,5 @@
 import {
+  Activity,
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
@@ -6,6 +7,7 @@ import {
   ExternalLink,
   Github,
   ImageUp,
+  LayoutDashboard,
   Loader2,
   Mic,
   PauseCircle,
@@ -13,6 +15,7 @@ import {
   RefreshCw,
   Rocket,
   Send,
+  Settings,
   Square,
   Unplug,
   Wand2,
@@ -64,15 +67,15 @@ const runningStatuses: ProjectStatus[] = [
 
 const statusTone: Record<ProjectStatus, string> = {
   IDLE: "border-zinc-700 bg-zinc-900 text-zinc-300",
-  PROCESSING_INPUT: "border-orange-500/45 bg-orange-500/10 text-orange-100",
-  GENERATING_PROMPT: "border-cyan-400/45 bg-cyan-400/10 text-cyan-100",
-  SENDING_TO_CODEX: "border-blue-400/45 bg-blue-400/10 text-blue-100",
-  CODEX_WORKING: "border-violet-400/45 bg-violet-400/10 text-violet-100",
-  SAVING_TO_GITHUB: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  DEPLOYING: "border-orange-400/45 bg-orange-400/10 text-orange-100",
+  PROCESSING_INPUT: "border-purple-500/45 bg-purple-500/10 text-purple-100",
+  GENERATING_PROMPT: "border-fuchsia-400/45 bg-fuchsia-400/10 text-fuchsia-100",
+  SENDING_TO_CODEX: "border-cyan-400/45 bg-cyan-400/10 text-cyan-100",
+  CODEX_WORKING: "border-teal-400/45 bg-teal-400/10 text-teal-100",
+  SAVING_TO_GITHUB: "border-blue-500/40 bg-blue-500/10 text-blue-200",
+  DEPLOYING: "border-emerald-400/45 bg-emerald-400/10 text-emerald-100",
   LIVE: "border-emerald-400/45 bg-emerald-400/10 text-emerald-100",
   FAILED: "border-rose-500/50 bg-rose-500/10 text-rose-200",
-  STOPPED: "border-orange-500/50 bg-orange-500/10 text-orange-200"
+  STOPPED: "border-zinc-500/50 bg-zinc-500/10 text-zinc-200"
 };
 
 function isRunning(project?: Project | null) {
@@ -178,51 +181,58 @@ export default function App() {
   };
 
   return (
-    <main className="min-h-screen bg-[#080806] text-zinc-100">
-      <div className="fixed inset-0 -z-10 bg-[linear-gradient(155deg,rgba(8,8,6,0.99)_0%,rgba(24,17,10,0.98)_45%,rgba(7,21,24,0.96)_100%)]" />
-      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 py-4 sm:px-6 lg:px-8">
+    <main className="flex flex-col md:flex-row h-screen w-screen overflow-hidden bg-[#05080f] text-zinc-100 relative">
+      <div className="absolute inset-0 z-0 bg-[linear-gradient(155deg,rgba(5,8,15,0.99)_0%,rgba(10,11,24,0.98)_45%,rgba(15,23,42,0.96)_100%)]" />
+      
+      <Sidebar view={view} setView={setView} />
+      
+      <div className="flex-1 flex flex-col relative z-10 overflow-hidden">
         <AppHeader
           view={view}
           onBack={() => setView({ name: "dashboard" })}
           onNew={() => setView({ name: "new" })}
         />
 
-        {notice ? <Notice message={notice} onClose={() => setNotice(null)} /> : null}
-        {setup ? (
-          <SetupBanner
-            setup={setup}
-            onDisconnect={async () => {
-              setSetup(await api.disconnectGithub());
-              await refreshAll();
-            }}
-          />
-        ) : null}
+        <div className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:pb-8 sm:px-6 lg:px-8">
+          <div className="mx-auto w-full max-w-5xl flex flex-col min-h-full">
+            {notice ? <Notice message={notice} onClose={() => setNotice(null)} /> : null}
+            {setup ? (
+              <SetupBanner
+                setup={setup}
+                onDisconnect={async () => {
+                  setSetup(await api.disconnectGithub());
+                  await refreshAll();
+                }}
+              />
+            ) : null}
 
-        <section className="flex-1 pb-8 pt-4">
-          {loading ? (
-            <LoadingScreen />
-          ) : view.name === "dashboard" ? (
-            <Dashboard projects={projects} onOpen={openProject} />
-          ) : view.name === "new" ? (
-            <ProjectInputScreen mode="create" onSubmit={handleCreate} onCancel={() => setView({ name: "dashboard" })} />
-          ) : view.name === "edit" && selectedProject ? (
-            <ProjectInputScreen
-              mode="edit"
-              project={selectedProject}
-              onSubmit={handleEditSubmit}
-              onCancel={() => setView({ name: "detail", projectId: selectedProject.id })}
-            />
-          ) : selectedProject ? (
-            <ProjectDetails
-              project={selectedProject}
-              onEdit={() => beginEdit(selectedProject)}
-              onStop={() => stopProject(selectedProject)}
-              onRefresh={() => refreshProject(selectedProject)}
-            />
-          ) : (
-            <EmptyProject onBack={() => setView({ name: "dashboard" })} />
-          )}
-        </section>
+            <section className="flex-1 pb-8 pt-4">
+              {loading ? (
+                <LoadingScreen />
+              ) : view.name === "dashboard" ? (
+                <Dashboard projects={projects} onOpen={openProject} />
+              ) : view.name === "new" ? (
+                <ProjectInputScreen mode="create" onSubmit={handleCreate} onCancel={() => setView({ name: "dashboard" })} />
+              ) : view.name === "edit" && selectedProject ? (
+                <ProjectInputScreen
+                  mode="edit"
+                  project={selectedProject}
+                  onSubmit={handleEditSubmit}
+                  onCancel={() => setView({ name: "detail", projectId: selectedProject.id })}
+                />
+              ) : selectedProject ? (
+                <ProjectDetails
+                  project={selectedProject}
+                  onEdit={() => beginEdit(selectedProject)}
+                  onStop={() => stopProject(selectedProject)}
+                  onRefresh={() => refreshProject(selectedProject)}
+                />
+              ) : (
+                <EmptyProject onBack={() => setView({ name: "dashboard" })} />
+              )}
+            </section>
+          </div>
+        </div>
       </div>
 
       {confirmEdit ? (
@@ -232,9 +242,89 @@ export default function App() {
           onConfirm={stopAndEdit}
         />
       ) : null}
+
+      <BottomNav view={view} setView={setView} />
     </main>
   );
 }
+
+function Sidebar({ view, setView }: { view: View; setView: (v: View) => void }) {
+  const isDashboard = view.name === "dashboard";
+  const isNew = view.name === "new";
+  
+  return (
+    <aside className="hidden md:flex relative z-20 w-64 shrink-0 flex-col border-r border-white/5 bg-white/[0.01] backdrop-blur-xl p-4">
+      <div className="flex items-center gap-3 mb-8 px-2">
+         <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-glow-cyan">
+           <Rocket size={18} />
+         </div>
+         <span className="text-lg font-bold tracking-wide text-white">deployRocket</span>
+      </div>
+
+      <nav className="flex-1 space-y-2">
+        <button
+          onClick={() => setView({ name: "dashboard" })}
+          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+            isDashboard
+              ? "bg-cyan-500/15 text-cyan-300 shadow-[inset_2px_0_0_0_rgba(34,211,238,1)]" 
+              : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+          }`}
+        >
+          <LayoutDashboard size={20} />
+          Dashboard
+        </button>
+        <button
+          onClick={() => setView({ name: "new" })}
+          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+            isNew
+              ? "bg-cyan-500/15 text-cyan-300 shadow-[inset_2px_0_0_0_rgba(34,211,238,1)]" 
+              : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+          }`}
+        >
+          <Plus size={20} />
+          Launch Request
+        </button>
+      </nav>
+
+      <div className="border-t border-white/10 pt-4 mt-auto">
+        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200">
+          <Settings size={20} />
+          Settings
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function BottomNav({ view, setView }: { view: View; setView: (v: View) => void }) {
+  const isDashboard = view.name === "dashboard";
+  const isNew = view.name === "new";
+  
+  return (
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-white/5 bg-[#05080f]/80 backdrop-blur-xl px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+      <button
+        onClick={() => setView({ name: "dashboard" })}
+        className={`flex flex-col items-center gap-1 transition ${isDashboard ? "text-cyan-400" : "text-zinc-500 hover:text-zinc-300"}`}
+      >
+        <LayoutDashboard size={20} />
+        <span className="text-[10px] font-medium tracking-wide uppercase">Dashboard</span>
+      </button>
+      <button
+        onClick={() => setView({ name: "new" })}
+        className={`flex flex-col items-center gap-1 transition ${isNew ? "text-cyan-400" : "text-zinc-500 hover:text-zinc-300"}`}
+      >
+        <Plus size={20} />
+        <span className="text-[10px] font-medium tracking-wide uppercase">Launch</span>
+      </button>
+      <button className="flex flex-col items-center gap-1 text-zinc-500 transition hover:text-zinc-300">
+        <Settings size={20} />
+        <span className="text-[10px] font-medium tracking-wide uppercase">Settings</span>
+      </button>
+    </nav>
+  );
+}
+
+
 
 function AppHeader({
   view,
@@ -247,7 +337,7 @@ function AppHeader({
 }) {
   const showBack = view.name !== "dashboard";
   return (
-    <header className="sticky top-0 z-20 -mx-4 border-b border-white/10 bg-[#080806]/88 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+    <header className="sticky top-0 z-20 border-b border-white/5 bg-[#05080f]/50 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8 shrink-0">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {showBack ? (
@@ -255,17 +345,13 @@ function AppHeader({
               <ArrowLeft size={19} />
             </IconButton>
           ) : (
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-orange-300/35 bg-orange-400/10 text-orange-100">
-              <Rocket size={20} />
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-semibold text-white">Dashboard</h1>
             </div>
           )}
-          <div className="min-w-0">
-            <p className="truncate text-sm uppercase tracking-[0.18em] text-orange-200/85">launch control</p>
-            <h1 className="truncate text-xl font-semibold text-white">deployRocket</h1>
-          </div>
         </div>
         <button
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-orange-300 px-3 text-sm font-semibold text-zinc-950 shadow-glow transition hover:bg-orange-200"
+          className="inline-flex h-10 items-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300"
           onClick={onNew}
           type="button"
         >
@@ -303,19 +389,19 @@ function SetupBanner({
   }
 
   return (
-    <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-50">
+    <div className="mt-4 rounded-lg border border-purple-400/30 bg-purple-400/10 p-3 text-sm text-purple-50 backdrop-blur-md">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 shrink-0 text-amber-200" size={18} />
+        <AlertTriangle className="mt-0.5 shrink-0 text-purple-300" size={18} />
         <div className="min-w-0 flex-1">
           <p className="font-medium">Setup required</p>
-          <p className="mt-1 text-amber-100/80">{setup.missing.join(", ")}</p>
-          <p className="mt-2 break-all text-xs text-amber-100/70">Callback: {setup.callbackUrl}</p>
+          <p className="mt-1 text-purple-100/80">{setup.missing.join(", ")}</p>
+          <p className="mt-2 break-all text-xs text-purple-100/70">Callback: {setup.callbackUrl}</p>
         </div>
       </div>
       {setup.githubOAuthConfigured ? (
         <a
           href="/auth/github"
-          className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-amber-200 px-3 text-sm font-semibold text-zinc-950"
+          className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-purple-300 px-3 text-sm font-semibold text-zinc-950 shadow-glow-purple"
         >
           <Github size={16} />
           Connect GitHub
@@ -335,7 +421,7 @@ function Dashboard({
   if (projects.length === 0) {
     return (
       <div className="flex min-h-[58vh] flex-col items-center justify-center text-center">
-        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-orange-200">
+        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 backdrop-blur-md">
           <Rocket size={28} />
         </div>
         <h2 className="text-2xl font-semibold text-white">Ready for launch</h2>
@@ -345,11 +431,11 @@ function Dashboard({
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {projects.map((project) => (
         <button
           key={project.id}
-          className="rounded-lg border border-white/10 bg-white/[0.05] p-4 text-left transition hover:border-orange-300/45 hover:bg-white/[0.07]"
+          className="rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left backdrop-blur-md transition hover:border-cyan-400/45 hover:bg-white/[0.04] hover:shadow-glow-cyan"
           type="button"
           onClick={() => onOpen(project)}
         >
@@ -453,87 +539,102 @@ function ProjectInputScreen({
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-9rem)] max-w-2xl flex-col">
-      <div className="mb-4">
-        <p className="text-sm uppercase tracking-[0.18em] text-orange-200/80">
-          {mode === "create" ? "Launch Request" : "Mission Update"}
-        </p>
-        <h2 className="mt-1 text-2xl font-semibold text-white">
-          {mode === "create" ? "Chart the payload" : project?.name}
-        </h2>
+    <div className="mx-auto flex h-full min-h-[calc(100vh-10rem)] max-w-3xl flex-col items-center justify-center relative pb-20 md:pb-6">
+      <div className="w-full flex flex-col items-center justify-center text-center px-4 pb-8">
+         <div className="flex h-16 w-16 items-center justify-center rounded-full border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 shadow-glow-cyan mb-6">
+           {mode === "create" ? <Rocket size={32} /> : <Wand2 size={32} />}
+         </div>
+         <h2 className="text-3xl font-semibold text-white tracking-tight">
+           {mode === "create" ? "Initialize Launch Sequence" : "Mission Update"}
+         </h2>
+         <p className="mt-3 text-sm leading-relaxed text-zinc-400 max-w-md">
+           {mode === "create" 
+             ? "Describe your project requirements. The AI will chart the architecture, setup the repository, and deploy the initial version."
+             : `Adjust the mission parameters for ${project?.name}.`}
+         </p>
       </div>
 
-      <div className="flex flex-1 flex-col justify-end rounded-lg border border-white/10 bg-white/[0.045] p-3">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          className="min-h-[42vh] flex-1 resize-none rounded-lg border border-white/10 bg-[#0c0b09]/88 p-4 text-base leading-7 text-white outline-none transition placeholder:text-zinc-600 focus:border-orange-300/60"
-          placeholder={mode === "create" ? "Launch a project that..." : "Adjust the mission..."}
-        />
-
-        {images.length > 0 ? (
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {images.map((image, index) => (
-              <div
-                key={`${image.name}-${index}`}
-                className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-zinc-900 px-2 py-1 text-xs text-zinc-300"
-              >
-                <ImageUp size={14} />
-                <span className="max-w-32 truncate">{image.name}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${image.name}`}
-                  onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                  className="text-zinc-500 hover:text-white"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
+      <div className="w-full px-2 mt-4 max-w-2xl">
+        {mode === "edit" ? (
+          <div className="flex justify-between items-center mb-3 px-1">
+             <span className="text-xs font-medium text-cyan-400 uppercase tracking-widest">{project?.name}</span>
+             <button onClick={onCancel} className="text-xs text-zinc-500 hover:text-zinc-300 transition">Cancel Update</button>
           </div>
         ) : null}
 
-        {error ? <p className="mt-3 text-sm text-rose-200">{error}</p> : null}
+        <div className="relative flex flex-col rounded-3xl border border-white/5 bg-[#0A0D15]/90 backdrop-blur-2xl shadow-[0_0_40px_rgba(34,211,238,0.05)] focus-within:border-cyan-400/40 focus-within:shadow-glow-cyan transition-all duration-500">
+           
+           {images.length > 0 ? (
+              <div className="flex gap-2 p-3 pb-0 overflow-x-auto">
+                {images.map((image, index) => (
+                  <div
+                    key={`${image.name}-${index}`}
+                    className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-zinc-900/50 px-2 py-1 text-xs text-zinc-300"
+                  >
+                    <ImageUp size={14} />
+                    <span className="max-w-32 truncate">{image.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      className="text-zinc-500 hover:text-white"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+           ) : null}
 
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <IconButton label={recording ? "Stop voice" : "Voice input"} onClick={toggleVoice} active={recording}>
-              {recording ? <Square size={18} /> : <Mic size={18} />}
-            </IconButton>
-            <IconButton label="Upload image" onClick={() => fileRef.current?.click()}>
-              <ImageUp size={18} />
-            </IconButton>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                setImages(Array.from(event.target.files ?? []).slice(0, 4));
-                event.target.value = "";
-              }}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-300"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={submitting}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-orange-300 px-4 text-sm font-semibold text-zinc-950 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {submitting ? <Loader2 className="animate-spin" size={17} /> : <Send size={17} />}
-              Send
-            </button>
-          </div>
+           <div className="flex items-end gap-2 p-2">
+             <div className="flex items-center gap-1 pb-1 pl-1 shrink-0">
+               <IconButton label={recording ? "Stop voice" : "Voice input"} onClick={toggleVoice} active={recording}>
+                 {recording ? <Square size={20} className="text-rose-400" /> : <Mic size={20} />}
+               </IconButton>
+               <IconButton label="Upload image" onClick={() => fileRef.current?.click()}>
+                 <ImageUp size={20} />
+               </IconButton>
+             </div>
+             
+             <textarea
+               value={text}
+               onChange={(event) => setText(event.target.value)}
+               className="max-h-[30vh] min-h-[44px] flex-1 resize-none bg-transparent py-3 px-2 text-[15px] leading-relaxed text-white placeholder:text-zinc-500 outline-none"
+               placeholder={mode === "create" ? "Launch a project that..." : "Adjust the mission..."}
+               rows={text.split('\n').length > 1 ? Math.min(text.split('\n').length, 5) : 1}
+               onKeyDown={(e) => {
+                 if (e.key === 'Enter' && !e.shiftKey) {
+                   e.preventDefault();
+                   if (!submitting) submit();
+                 }
+               }}
+             />
+
+             <div className="pb-1 pr-1 shrink-0">
+               <button
+                 type="button"
+                 onClick={submit}
+                 disabled={submitting}
+                 className="flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-400 text-cyan-950 transition-all hover:bg-cyan-300 disabled:opacity-50 disabled:hover:bg-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.4)]"
+               >
+                 {submitting ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
+               </button>
+             </div>
+           </div>
         </div>
+        
+        {error ? <p className="mt-3 text-center text-xs text-rose-400">{error}</p> : null}
+        
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            setImages(Array.from(event.target.files ?? []).slice(0, 4));
+            event.target.value = "";
+          }}
+        />
       </div>
     </div>
   );
@@ -551,95 +652,100 @@ function ProjectDetails({
   onRefresh: () => void;
 }) {
   return (
-    <div className="mx-auto max-w-3xl">
-      <div className="rounded-lg border border-white/10 bg-white/[0.045] p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-2xl font-semibold text-white">{project.name}</h2>
-            <p className="mt-2 text-sm leading-6 text-zinc-400">{project.summary}</p>
-          </div>
-          <StatusPill status={project.status} />
-        </div>
-
-        <div className="mt-5 rounded-lg border border-white/10 bg-[#0c0b09]/70 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Active Step</p>
-          <div className="mt-2 flex items-center gap-2 text-white">
-            {isRunning(project) ? <Loader2 className="animate-spin text-orange-200" size={18} /> : <Circle size={14} />}
-            <span>{project.currentStep}</span>
+    <div className="mx-auto flex w-full max-w-6xl gap-6 flex-col lg:flex-row">
+      <div className="flex-1 flex flex-col gap-4">
+        {/* Left Column: Header and Logs */}
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-2xl font-semibold text-white">{project.name}</h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">{project.summary}</p>
+            </div>
+            <StatusPill status={project.status} />
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {project.githubRepoUrl ? (
-            <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
-          ) : null}
-          {project.githubPagesUrl ? (
-            <ExternalAnchor href={project.githubPagesUrl} icon={<ExternalLink size={16} />} label="Live Site" />
-          ) : null}
-        </div>
+        {project.error ? <ErrorPanel project={project} /> : null}
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-zinc-200"
-          >
-            <RefreshCw size={16} />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={onEdit}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-zinc-100 px-3 text-sm font-semibold text-zinc-950"
-          >
-            <Wand2 size={16} />
-            Edit
-          </button>
-          {isRunning(project) ? (
-            <button
-              type="button"
-              onClick={onStop}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-orange-300/30 bg-orange-400/10 px-3 text-sm text-orange-100"
-            >
-              <PauseCircle size={16} />
-              Stop
-            </button>
-          ) : null}
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-5 shadow-xl flex-1">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-white">Deployment Timeline</h3>
+            <span className="text-xs text-zinc-500">{project.actions.length} events</span>
+          </div>
+          <div className="space-y-4 relative before:absolute before:inset-0 before:ml-[13px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/5 before:to-transparent">
+            {[...project.actions].reverse().map((action) => (
+              <div key={action.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+                <div className="flex items-center justify-center w-7 h-7 rounded-full border border-white/5 bg-zinc-900 text-zinc-300 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow shadow-zinc-900 z-10">
+                  {action.level === "success" ? <CheckCircle2 size={14} className="text-emerald-400" /> : <Circle size={10} className="text-cyan-400" />}
+                </div>
+                <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-1.5rem)] p-3 rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-sm">
+                  <div className="flex items-start justify-between gap-3 mb-1">
+                    <p className="text-sm text-zinc-100 font-medium">{action.message}</p>
+                    <span className="shrink-0 text-xs text-zinc-500">{formatTime(action.at)}</span>
+                  </div>
+                  {action.details ? <p className="text-xs text-zinc-400">{action.details}</p> : null}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {project.error ? <ErrorPanel project={project} /> : null}
-
-      <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.045] p-4">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-white">Action History</h3>
-          <span className="text-xs text-zinc-500">{project.actions.length} events</span>
+      <div className="w-full lg:w-80 shrink-0 flex flex-col gap-4">
+        {/* Right Column: Active Step, Links, Actions */}
+        <div className="rounded-lg border border-cyan-400/20 bg-cyan-950/20 p-4 backdrop-blur-sm shadow-glow-cyan">
+          <p className="text-xs uppercase tracking-[0.18em] text-cyan-500 mb-2">Current Status</p>
+          <div className="flex items-center gap-2 text-cyan-100">
+            {isRunning(project) ? <Loader2 className="animate-spin text-cyan-300" size={18} /> : <Circle size={14} />}
+            <span className="font-semibold">{project.currentStep}</span>
+          </div>
         </div>
-        <div className="space-y-3">
-          {[...project.actions].reverse().map((action) => (
-            <div key={action.id} className="flex gap-3">
-              <div
-                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${
-                  action.level === "error"
-                    ? "border-rose-300/40 bg-rose-400/10 text-rose-200"
-                    : action.level === "success"
-                      ? "border-lime-300/35 bg-lime-400/10 text-lime-200"
-                      : action.level === "warning"
-                        ? "border-amber-300/35 bg-amber-400/10 text-amber-200"
-                        : "border-white/10 bg-zinc-900 text-zinc-300"
-                }`}
-              >
-                {action.level === "success" ? <CheckCircle2 size={15} /> : <Circle size={12} />}
-              </div>
-              <div className="min-w-0 flex-1 border-b border-white/5 pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm text-zinc-100">{action.message}</p>
-                  <span className="shrink-0 text-xs text-zinc-500">{formatTime(action.at)}</span>
-                </div>
-                {action.details ? <p className="mt-1 break-all text-xs text-zinc-500">{action.details}</p> : null}
-              </div>
-            </div>
-          ))}
+
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-4 shadow-2xl">
+          <p className="text-xs uppercase tracking-[0.18em] text-zinc-500 mb-3">Project Links</p>
+          <div className="flex flex-col gap-2">
+            {project.githubRepoUrl ? (
+              <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
+            ) : null}
+            {project.githubPagesUrl ? (
+              <ExternalAnchor href={project.githubPagesUrl} icon={<ExternalLink size={16} />} label="Live Site" />
+            ) : null}
+            {!project.githubRepoUrl && !project.githubPagesUrl ? (
+              <p className="text-sm text-zinc-500">No links generated yet.</p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-4 shadow-2xl">
+           <p className="text-xs uppercase tracking-[0.18em] text-zinc-500 mb-3">Controls</p>
+           <div className="flex flex-col gap-2">
+             <button
+               type="button"
+               onClick={onRefresh}
+               className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/5 px-3 text-sm text-zinc-200 hover:bg-white/5 transition"
+             >
+               <RefreshCw size={16} />
+               Refresh Status
+             </button>
+             <button
+               type="button"
+               onClick={onEdit}
+               className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300"
+             >
+               <Wand2 size={16} />
+               Edit Mission
+             </button>
+             {isRunning(project) ? (
+               <button
+                 type="button"
+                 onClick={onStop}
+                 className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-purple-400/30 bg-purple-500/10 px-3 text-sm text-purple-200 hover:bg-purple-500/20 transition"
+               >
+                 <PauseCircle size={16} />
+                 Stop Process
+               </button>
+             ) : null}
+           </div>
         </div>
       </div>
     </div>
@@ -701,7 +807,7 @@ function ConfirmDialog({
               await onConfirm();
             }}
             disabled={busy}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-orange-300 px-3 text-sm font-semibold text-zinc-950 disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan disabled:opacity-60"
           >
             {busy ? <Loader2 className="animate-spin" size={16} /> : <PauseCircle size={16} />}
             Stop and Continue
@@ -741,8 +847,8 @@ function IconButton({
       onClick={onClick}
       className={`flex h-10 w-10 items-center justify-center rounded-lg border transition ${
         active
-          ? "border-orange-300 bg-orange-300 text-zinc-950"
-          : "border-white/10 bg-white/[0.05] text-zinc-200 hover:border-orange-300/45"
+          ? "border-cyan-400 bg-cyan-400 text-zinc-950 shadow-glow-cyan"
+          : "border-white/10 bg-white/[0.05] text-zinc-200 hover:border-cyan-400/45 hover:shadow-glow-cyan"
       }`}
     >
       {children}
@@ -786,7 +892,7 @@ function Notice({ message, onClose }: { message: string; onClose: () => void }) 
 
 function LoadingScreen() {
   return (
-    <div className="flex min-h-[50vh] items-center justify-center text-orange-100">
+    <div className="flex min-h-[50vh] items-center justify-center text-cyan-100">
       <Loader2 className="animate-spin" size={28} />
     </div>
   );
@@ -795,7 +901,7 @@ function LoadingScreen() {
 function EmptyProject({ onBack }: { onBack: () => void }) {
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-      <AlertTriangle className="text-amber-200" size={30} />
+      <AlertTriangle className="text-purple-200" size={30} />
       <p className="mt-3 text-zinc-300">Project not found.</p>
       <button
         type="button"
