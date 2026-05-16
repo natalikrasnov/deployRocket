@@ -10,17 +10,19 @@ import type {
   StructuredRequirements
 } from "../../shared/types.js";
 
-const GeneratedProjectSchema = z.object({
+const EncodedGeneratedProjectSchema = z.object({
   files: z.array(
     z.object({
       path: z.string(),
-      content: z.string()
+      contentBase64: z.string()
     })
   ),
   implementationSummary: z.string(),
   setupNotes: z.array(z.string()),
   warnings: z.array(z.string())
 });
+
+type EncodedGeneratedProject = z.infer<typeof EncodedGeneratedProjectSchema>;
 
 const blockedPathPatterns = [
   /^\/|^[a-zA-Z]:/,
@@ -52,11 +54,15 @@ export class CodexRunner {
     requirements: StructuredRequirements,
     promptPlan: CodexPromptPlan,
     previousFiles: GeneratedFile[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    continueContext?: string
   ): Promise<{ runId: string; generated: GeneratedProject }> {
     const client = this.getClient();
 
-    const response = await client.responses.parse(
+    let response: Awaited<ReturnType<typeof client.responses.parse>>;
+
+    try {
+      response = await client.responses.parse(
       {
         model: config.openaiCodexModel,
         input: [
@@ -66,6 +72,8 @@ export class CodexRunner {
               "You are Agent 3, the Codex Runner.",
               "Generate or modify a deployable software project.",
               "Return only files through the required JSON schema.",
+              "Every file content must be UTF-8 encoded as base64 in contentBase64.",
+              "Never place raw source code, markdown, quotes, or multiline text directly in JSON string fields.",
               "All code must be real, cohesive, and buildable.",
               "The target deployment platform is GitHub Pages using GitHub Actions.",
               "The project must be a static Vite React TypeScript application.",
@@ -84,6 +92,10 @@ export class CodexRunner {
                 ? `Existing files to modify. Return a complete replacement set, not a patch:\n${JSON.stringify(previousFiles, null, 2)}`
                 : "This is a new project. Return the complete file set.",
               "",
+              continueContext
+                ? `Continuation context from a failed deployRocket run. Use this to fix the prior failure and continue, not restart blindly:\n${continueContext}`
+                : "No failed-run continuation context is present.",
+              "",
               "Required file expectations:",
               "- package.json with dev, build, and preview scripts.",
               "- index.html.",
@@ -92,20 +104,38 @@ export class CodexRunner {
               "- src/styles.css or equivalent CSS imported by main.tsx.",
               "- README.md with project-specific run notes.",
               "",
-              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. GitHub Pages cannot run a server."
+              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. GitHub Pages cannot run a server.",
+              "Important output rule:",
+              "- For each file, set contentBase64 to base64(UTF-8 file content).",
+              "- Do not wrap base64 text in markdown fences.",
+              "- Do not include raw file content in any JSON field."
             ].join("\n")
           }
         ],
         text: {
-          format: zodTextFormat(GeneratedProjectSchema, "generated_project")
+          format: zodTextFormat(EncodedGeneratedProjectSchema, "generated_project")
         },
         reasoning: { effort: "high" },
         max_output_tokens: 22000
       },
       { signal }
     );
+    } catch (error) {
+      throw new AppError("Codex returned malformed generated-file JSON.", {
+        code: "CODEX_MALFORMED_RESPONSE",
+        statusCode: 502,
+        details: error instanceof Error ? error.message : String(error),
+        setupInstructions: [
+          "Use Edit Mission and retry the generation.",
+          "If this repeats, request a smaller first version with fewer files or less visual complexity.",
+          "deployRocket now asks Codex to encode file contents safely, so repeated failures usually mean the model response was truncated."
+        ]
+      });
+    }
 
-    if (!response.output_parsed) {
+    const parsed = response.output_parsed as EncodedGeneratedProject | null;
+
+    if (!parsed) {
       throw new AppError("Codex returned no generated project files.", {
         code: "CODEX_MALFORMED_RESPONSE",
         statusCode: 502
@@ -114,7 +144,19 @@ export class CodexRunner {
 
     return {
       runId: response.id,
-      generated: this.normalizeGeneratedProject(response.output_parsed)
+      generated: this.normalizeGeneratedProject(this.decodeGeneratedProject(parsed))
+    };
+  }
+
+  private decodeGeneratedProject(encoded: EncodedGeneratedProject): GeneratedProject {
+    return {
+      implementationSummary: encoded.implementationSummary,
+      setupNotes: encoded.setupNotes,
+      warnings: encoded.warnings,
+      files: encoded.files.map((file) => ({
+        path: file.path,
+        content: decodeBase64FileContent(file.path, file.contentBase64)
+      }))
     };
   }
 
@@ -146,6 +188,23 @@ export class CodexRunner {
       ...generated,
       files: [...byPath.entries()].map(([path, content]) => ({ path, content }))
     };
+  }
+}
+
+function decodeBase64FileContent(path: string, contentBase64: string) {
+  try {
+    const normalized = contentBase64.replace(/\s+/g, "");
+    const decoded = Buffer.from(normalized, "base64").toString("utf8");
+    if (!decoded.trim()) {
+      throw new Error("Decoded content is empty.");
+    }
+    return decoded;
+  } catch (error) {
+    throw new AppError(`Codex generated invalid base64 content for: ${path}`, {
+      code: "CODEX_INVALID_FILE_ENCODING",
+      statusCode: 502,
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 }
 

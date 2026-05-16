@@ -122,6 +122,7 @@ export interface Project {
   activeInputId?: string;
   activeRunKind?: "create" | "edit";
   pagesDispatchRequestedAt?: string;
+  continueContext?: string;
 }
 
 export interface JsonDatabase {

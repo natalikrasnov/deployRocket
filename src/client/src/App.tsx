@@ -102,6 +102,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmEdit, setConfirmEdit] = useState<Project | null>(null);
+  const [popup, setPopup] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const selectedProject = useMemo(() => {
     if (view.name !== "detail" && view.name !== "edit") return null;
@@ -119,6 +120,19 @@ export default function App() {
       .catch((error) => setNotice(readError(error)))
       .finally(() => setLoading(false));
   }, [refreshAll]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const github = params.get("github");
+    if (github === "connected") {
+      setPopup({ type: "success", message: "Successfully connected to GitHub." });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (github === "error") {
+      const code = params.get("code") || "Unknown error";
+      setPopup({ type: "error", message: `GitHub connection failed: ${code}` });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   useEffect(() => {
     let inFlight = false;
@@ -199,6 +213,16 @@ export default function App() {
     setProjects((current) => upsertProject(current, refreshed));
   };
 
+  const continueProject = async (project: Project) => {
+    try {
+      const continued = await api.continueProject(project.id);
+      setProjects((current) => upsertProject(current, continued));
+      setView({ name: "detail", projectId: continued.id });
+    } catch (error) {
+      setNotice(readError(error));
+    }
+  };
+
   return (
     <main className="flex flex-col md:flex-row h-screen w-screen overflow-hidden bg-[#05080f] text-zinc-100 relative">
       <div className="absolute inset-0 z-0 bg-[linear-gradient(155deg,rgba(5,8,15,0.99)_0%,rgba(10,11,24,0.98)_45%,rgba(15,23,42,0.96)_100%)]" />
@@ -245,6 +269,7 @@ export default function App() {
                   onEdit={() => beginEdit(selectedProject)}
                   onStop={() => stopProject(selectedProject)}
                   onRefresh={() => refreshProject(selectedProject)}
+                  onContinue={() => continueProject(selectedProject)}
                 />
               ) : (
                 <EmptyProject onBack={() => setView({ name: "dashboard" })} />
@@ -259,6 +284,14 @@ export default function App() {
           project={confirmEdit}
           onCancel={() => setConfirmEdit(null)}
           onConfirm={stopAndEdit}
+        />
+      ) : null}
+
+      {popup ? (
+        <Popup
+          type={popup.type}
+          message={popup.message}
+          onClose={() => setPopup(null)}
         />
       ) : null}
 
@@ -663,13 +696,26 @@ function ProjectDetails({
   project,
   onEdit,
   onStop,
-  onRefresh
+  onRefresh,
+  onContinue
 }: {
   project: Project;
   onEdit: () => void;
   onStop: () => void;
   onRefresh: () => void;
+  onContinue: () => Promise<void> | void;
 }) {
+  const [continueBusy, setContinueBusy] = useState(false);
+
+  const handleContinue = async () => {
+    setContinueBusy(true);
+    try {
+      await onContinue();
+    } finally {
+      setContinueBusy(false);
+    }
+  };
+
   return (
     <div className="mx-auto flex w-full max-w-6xl gap-6 flex-col lg:flex-row">
       <div className="flex-1 flex flex-col gap-4">
@@ -746,6 +792,17 @@ function ProjectDetails({
                <RefreshCw size={16} />
                Refresh Status
              </button>
+             {project.status === "FAILED" ? (
+               <button
+                 type="button"
+                 onClick={handleContinue}
+                 disabled={continueBusy}
+                 className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-300/30 bg-emerald-400/15 px-3 text-sm font-semibold text-emerald-100 shadow-[0_0_18px_rgba(52,211,153,0.16)] transition hover:bg-emerald-400/25 disabled:cursor-not-allowed disabled:opacity-60"
+               >
+                 {continueBusy ? <Loader2 className="animate-spin" size={16} /> : <Rocket size={16} />}
+                 Continue Mission
+               </button>
+             ) : null}
              <button
                type="button"
                onClick={onEdit}
@@ -832,6 +889,40 @@ function ConfirmDialog({
             Stop and Continue
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function Popup({ type, message, onClose }: { type: "success" | "error"; message: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="relative flex w-full max-w-sm flex-col items-center rounded-lg border border-white/10 bg-zinc-950 p-6 text-center shadow-2xl">
+        <button onClick={onClose} className="absolute right-3 top-3 text-zinc-500 transition hover:text-white">
+          <X size={18} />
+        </button>
+        <div
+          className={`mb-4 flex h-14 w-14 items-center justify-center rounded-full border ${
+            type === "success"
+              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]"
+              : "border-rose-400/20 bg-rose-400/10 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.3)]"
+          }`}
+        >
+          {type === "success" ? <CheckCircle2 size={28} /> : <AlertTriangle size={28} />}
+        </div>
+        <h3 className="mb-2 text-xl font-semibold text-white">{type === "success" ? "Success" : "Error"}</h3>
+        <p className="text-sm leading-relaxed text-zinc-300">{message}</p>
+        <button
+          type="button"
+          onClick={onClose}
+          className={`mt-6 h-10 w-full rounded-lg font-semibold transition ${
+            type === "success"
+              ? "bg-emerald-400 text-emerald-950 shadow-[0_0_15px_rgba(52,211,153,0.4)] hover:bg-emerald-300"
+              : "bg-rose-400 text-rose-950 shadow-[0_0_15px_rgba(244,63,94,0.4)] hover:bg-rose-300"
+          }`}
+        >
+          {type === "success" ? "Continue" : "Dismiss"}
+        </button>
       </div>
     </div>
   );

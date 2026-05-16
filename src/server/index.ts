@@ -214,6 +214,17 @@ app.post("/api/projects/:id/stop", async (req, res, next) => {
   }
 });
 
+app.post("/api/projects/:id/continue", async (req, res, next) => {
+  try {
+    const project = await projectStore.getProject(projectIdFrom(req));
+    if (!project) throw notFound();
+    const nextProject = await orchestrator.continueFailedRun(project.id, githubSessionIdFrom(req));
+    res.status(202).json(nextProject);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/projects/:id/run", async (req, res, next) => {
   try {
     const project = await projectStore.getProject(projectIdFrom(req));
@@ -440,7 +451,7 @@ function frontendRedirect(query = "") {
     return url.toString();
   }
 
-  if (fs.existsSync(path.join(paths.clientDistDir, "index.html"))) {
+  if (config.isProduction) {
     return `/${query}`;
   }
   return `http://localhost:5173/${query}`;

@@ -45,14 +45,17 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `.env` before creating projects. Do not commit `.env`; the committed `.env.example` only documents the required settings.
+Fill in `.env` before creating projects. `.env` and `.env.prod` are ignored by git so local secrets do not get committed; `.env.example` is the committed reference.
 
 ## Environment Variables
 
+Local development uses `.env`. Production/serverless values can be staged in `.env.prod` and copied into Vercel or your host environment settings. Do not put private server secrets in GitHub Pages workflow variables.
+
 ```bash
 PORT=3000
-
 OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.2
+OPENAI_CODEX_MODEL=gpt-5.2-codex
 
 # GitHub OAuth app credentials for this deployRocket installation.
 # These identify the app, not the customer's GitHub account.
@@ -72,23 +75,25 @@ GITHUB_STATE_BRANCH=deployrocket-state
 
 # Comma-separated frontend origins allowed to call the API.
 # Origins do not include paths. For GitHub Pages use: https://YOUR_USERNAME.github.io
-FRONTEND_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
+FRONTEND_ORIGIN=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
 
 # Public frontend app URL used after GitHub OAuth redirects.
 # For GitHub Pages include the repository path, for example:
 # https://YOUR_USERNAME.github.io/deployRocket/
-FRONTEND_URL=
+FRONTEND_URL=http://localhost:5173
 
 # Public backend URL used by the static GitHub Pages frontend.
 # Leave empty for local same-origin/dev-proxy usage.
+# Example: https://api.your-domain.com
 VITE_API_BASE_URL=
 ```
 
-Optional model overrides:
+For the GitHub Pages static frontend workflow, set public repository Actions variables only:
 
 ```bash
-OPENAI_MODEL=gpt-5.2
-OPENAI_CODEX_MODEL=gpt-5.2-codex
+VITE_API_BASE_URL=https://your-api.example.com
+GITHUB_PROJECT_TOPIC=deployrocket-project
+GITHUB_STATE_BRANCH=deployrocket-state
 ```
 
 ## GitHub OAuth Setup

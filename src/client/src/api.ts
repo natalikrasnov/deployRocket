@@ -81,6 +81,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  continueProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/continue`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
   runProject: (id: string) =>
     request<Project>(`/api/projects/${id}/run`, {
       method: "POST",

@@ -155,6 +155,7 @@ class ProjectStore {
       delete project.activeInputId;
       delete project.activeRunKind;
       delete project.pagesDispatchRequestedAt;
+      delete project.continueContext;
       this.pushAction(project, error.message, "error", "FAILED", error.details);
     });
   }
@@ -166,6 +167,7 @@ class ProjectStore {
       delete project.activeInputId;
       delete project.activeRunKind;
       delete project.pagesDispatchRequestedAt;
+      delete project.continueContext;
       this.pushAction(project, message, "warning", "STOPPED");
     });
   }

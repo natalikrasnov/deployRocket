@@ -7,7 +7,7 @@ import { githubManager } from "./githubManager.js";
 import { inputProcessor } from "./inputProcessor.js";
 import { pagesDeployManager } from "./pagesDeployManager.js";
 import { promptArchitect } from "./promptArchitect.js";
-import type { GeneratedFile, GeneratedProject, ProjectError } from "../../shared/types.js";
+import type { GeneratedFile, GeneratedProject, Project, ProjectError } from "../../shared/types.js";
 
 interface ActiveRun {
   controller: AbortController;
@@ -137,6 +137,59 @@ export class Orchestrator {
         await projectStore.failProject(projectId, projectError);
       }
     }
+
+    return this.requireProject(projectId);
+  }
+
+  async continueFailedRun(projectId: string, githubSessionId: string) {
+    const project = await this.requireProject(projectId);
+    if (project.status !== "FAILED") {
+      throw new AppError("Only failed projects can be continued.", {
+        statusCode: 409,
+        code: "PROJECT_NOT_FAILED"
+      });
+    }
+
+    const input = project.inputs.at(-1);
+    if (!input) {
+      throw new AppError("No project input is available to continue from.", {
+        statusCode: 409,
+        code: "CONTINUE_INPUT_MISSING"
+      });
+    }
+
+    const nextStatus = await this.chooseContinueStatus(projectId, project);
+    await projectStore.updateProject(projectId, (current) => {
+      current.activeInputId = input.id;
+      current.activeRunKind = input.kind;
+      current.continueContext = this.buildContinueContext(project);
+      current.error = null;
+      delete current.pagesDispatchRequestedAt;
+    });
+    await projectStore.setStatus(
+      projectId,
+      nextStatus,
+      this.stepLabel(nextStatus),
+      "Continuing failed run with previous dossier, prompt, architecture, and error context",
+      "warning"
+    );
+
+    if (config.isServerless) {
+      return this.runNextStep(projectId, githubSessionId);
+    }
+
+    const controller = new AbortController();
+    this.activeRuns.set(projectId, {
+      controller,
+      inputId: input.id,
+      kind: input.kind,
+      startedAt: nowIso(),
+      githubSessionId
+    });
+
+    void this.runFromCurrentStatus(projectId, githubSessionId, controller.signal).finally(() => {
+      this.activeRuns.delete(projectId);
+    });
 
     return this.requireProject(projectId);
   }
@@ -401,7 +454,7 @@ export class Orchestrator {
   }
 
   private async codexGenerationStep(projectId: string, signal: AbortSignal) {
-    const { input, kind } = await this.requireActiveContext(projectId);
+    const { input, kind, project } = await this.requireActiveContext(projectId);
     if (!input.structuredRequirements || !input.codexPrompt) {
       throw new AppError("Codex prompt data is missing for this run.", {
         statusCode: 409,
@@ -409,18 +462,20 @@ export class Orchestrator {
       });
     }
 
-    const previousFiles = kind === "edit" ? await this.loadGeneratedFiles(projectId) : [];
+    const previousFiles = kind === "edit" || project.continueContext ? await this.loadGeneratedFiles(projectId) : [];
     const { runId, generated } = await codexRunner.generateProject(
       input.structuredRequirements,
       input.codexPrompt,
       previousFiles,
-      signal
+      signal,
+      project.continueContext
     );
     await this.throwIfStopped(projectId, signal);
 
     await this.saveGeneratedProject(projectId, generated);
     await projectStore.updateProject(projectId, (current) => {
       current.codexRunId = runId;
+      delete current.continueContext;
     });
     await projectStore.addAction(
       projectId,
@@ -520,7 +575,144 @@ export class Orchestrator {
       delete current.activeInputId;
       delete current.activeRunKind;
       delete current.pagesDispatchRequestedAt;
+      delete current.continueContext;
     });
+  }
+
+  private async runFromCurrentStatus(projectId: string, githubSessionId: string, signal: AbortSignal) {
+    try {
+      while (true) {
+        await this.throwIfStopped(projectId, signal);
+        await this.ensureSetup(projectId, githubSessionId, signal);
+        const current = await this.requireProject(projectId);
+
+        switch (current.status) {
+          case "PROCESSING_INPUT":
+            await this.processInputStep(projectId, signal);
+            break;
+          case "GENERATING_PROMPT":
+            await this.generatePromptStep(projectId, signal);
+            break;
+          case "SENDING_TO_CODEX":
+            await projectStore.setStatus(
+              projectId,
+              "CODEX_WORKING",
+              "Codex is generating project files",
+              "Codex started generation"
+            );
+            break;
+          case "CODEX_WORKING":
+            await this.codexGenerationStep(projectId, signal);
+            break;
+          case "SAVING_TO_GITHUB":
+            await this.githubSaveAndDeployStep(projectId, githubSessionId, signal);
+            break;
+          case "DEPLOYING":
+            await this.monitorDeployment(projectId, githubSessionId, signal);
+            await this.clearServerlessRun(projectId);
+            return;
+          default:
+            await this.clearServerlessRun(projectId);
+            return;
+        }
+      }
+    } catch (error) {
+      const latest = await projectStore.getProject(projectId);
+      if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
+        if (latest?.status !== "STOPPED") {
+          await projectStore.stopProject(projectId, "Stopped active orchestration");
+        }
+        return;
+      }
+
+      const readable = toReadableError(error);
+      const projectError: ProjectError = {
+        message: readable.message,
+        code: readable.code,
+        details: readable.details,
+        setupInstructions: readable.setupInstructions,
+        at: nowIso()
+      };
+      await projectStore.failProject(projectId, projectError);
+    }
+  }
+
+  private async chooseContinueStatus(projectId: string, project: Project) {
+    const input = project.inputs.at(-1);
+    if (!input?.structuredRequirements) return "PROCESSING_INPUT" as const;
+    if (!input.codexPrompt) return "GENERATING_PROMPT" as const;
+
+    if (this.shouldRepairWithCodex(project)) {
+      return "CODEX_WORKING" as const;
+    }
+
+    if (project.githubLastCommitSha && project.lastCommittedPaths.length && !project.githubPagesUrl) {
+      return "DEPLOYING" as const;
+    }
+
+    const generated = await this.loadGeneratedProject(projectId);
+    if (!generated.files.length) return "CODEX_WORKING" as const;
+    if (!project.githubLastCommitSha || !project.lastCommittedPaths.length) {
+      return "SAVING_TO_GITHUB" as const;
+    }
+    if (!project.githubPagesUrl) return "DEPLOYING" as const;
+    return "DEPLOYING" as const;
+  }
+
+  private stepLabel(status: "PROCESSING_INPUT" | "GENERATING_PROMPT" | "CODEX_WORKING" | "SAVING_TO_GITHUB" | "DEPLOYING") {
+    const labels = {
+      PROCESSING_INPUT: "Continuing input processing",
+      GENERATING_PROMPT: "Continuing architecture prompt",
+      CODEX_WORKING: "Continuing Codex generation",
+      SAVING_TO_GITHUB: "Continuing GitHub save",
+      DEPLOYING: "Continuing deployment"
+    };
+    return labels[status];
+  }
+
+  private shouldRepairWithCodex(project: Project) {
+    const code = project.error?.code;
+    if (!code) return true;
+    return [
+      "CODEX_API_FAILURE",
+      "CODEX_EMPTY_RESPONSE",
+      "CODEX_INVALID_FILE_ENCODING",
+      "CODEX_MALFORMED_RESPONSE",
+      "GITHUB_PAGES_DEPLOYMENT_FAILED",
+      "GITHUB_PAGES_TIMEOUT"
+    ].includes(code);
+  }
+
+  private buildContinueContext(project: Project) {
+    const latestInput = project.inputs.at(-1);
+    const actions = project.actions.slice(-30).map((action) => ({
+      at: action.at,
+      message: action.message,
+      level: action.level,
+      status: action.status,
+      details: action.details
+    }));
+
+    return JSON.stringify(
+      {
+        instruction: "Continue this deployRocket project from the failed stage. Preserve the original intent and fix the latest failure.",
+        project: {
+          name: project.name,
+          summary: project.summary,
+          status: project.status,
+          currentStep: project.currentStep,
+          repository: project.githubRepoUrl,
+          pagesUrl: project.githubPagesUrl
+        },
+        latestError: project.error,
+        originalInput: latestInput?.text,
+        structuredRequirements: latestInput?.structuredRequirements,
+        codexPrompt: latestInput?.codexPrompt,
+        actionHistory: actions
+      },
+      null,
+      2
+    );
   }
 
   private async ensureSetup(projectId: string, githubSessionId: string, signal: AbortSignal) {
