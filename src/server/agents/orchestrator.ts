@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { paths } from "../config.js";
+import { config } from "../config.js";
 import { AppError, isAbortError, setupHelp, toReadableError } from "../lib/errors.js";
 import { createId, nowIso } from "../lib/id.js";
 import { projectStore } from "../state/projectStore.js";
@@ -22,12 +20,36 @@ interface ActiveRun {
 export class Orchestrator {
   private activeRuns = new Map<string, ActiveRun>();
 
-  start(projectId: string, inputId: string, kind: "create" | "edit", githubSessionId: string) {
-    if (this.activeRuns.has(projectId)) {
+  async start(projectId: string, inputId: string, kind: "create" | "edit", githubSessionId: string) {
+    const project = await projectStore.getProject(projectId);
+    if (!project) {
+      throw new AppError("Project not found.", {
+        statusCode: 404,
+        code: "PROJECT_NOT_FOUND"
+      });
+    }
+
+    if (this.activeRuns.has(projectId) || projectStore.isRunning(project.status)) {
       throw new AppError("Project is already running.", {
         statusCode: 409,
         code: "PROJECT_ALREADY_RUNNING"
       });
+    }
+
+    if (config.isServerless) {
+      await projectStore.updateProject(projectId, (current) => {
+        current.activeInputId = inputId;
+        current.activeRunKind = kind;
+        current.error = null;
+        delete current.pagesDispatchRequestedAt;
+      });
+      await projectStore.setStatus(
+        projectId,
+        "PROCESSING_INPUT",
+        "Processing input",
+        kind === "create" ? "Processing user input" : "Processing edit request"
+      );
+      return;
     }
 
     const controller = new AbortController();
@@ -52,6 +74,71 @@ export class Orchestrator {
 
   isActive(projectId: string) {
     return this.activeRuns.has(projectId);
+  }
+
+  async runNextStep(projectId: string, githubSessionId: string) {
+    const project = await this.requireProject(projectId);
+    if (!projectStore.isRunning(project.status)) return project;
+
+    if (!config.isServerless && this.isActive(projectId)) {
+      return project;
+    }
+
+    const controller = new AbortController();
+    const signal = controller.signal;
+
+    try {
+      await this.ensureSetup(projectId, githubSessionId, signal);
+      const current = await this.requireProject(projectId);
+
+      switch (current.status) {
+        case "PROCESSING_INPUT":
+          await this.processInputStep(projectId, signal);
+          break;
+        case "GENERATING_PROMPT":
+          await this.generatePromptStep(projectId, signal);
+          break;
+        case "SENDING_TO_CODEX":
+          await projectStore.setStatus(
+            projectId,
+            "CODEX_WORKING",
+            "Codex is generating project files",
+            "Codex started generation"
+          );
+          break;
+        case "CODEX_WORKING":
+          await this.codexGenerationStep(projectId, signal);
+          break;
+        case "SAVING_TO_GITHUB":
+          await this.githubSaveAndDeployStep(projectId, githubSessionId, signal);
+          break;
+        case "DEPLOYING": {
+          const latest = await this.requireProject(projectId);
+          const result = await pagesDeployManager.pollProject(latest, githubSessionId, signal);
+          if (result.done) await this.clearServerlessRun(projectId);
+          break;
+        }
+      }
+    } catch (error) {
+      const latest = await projectStore.getProject(projectId);
+      if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
+        if (latest?.status !== "STOPPED") {
+          await projectStore.stopProject(projectId, "Stopped active orchestration");
+        }
+      } else {
+        const readable = toReadableError(error);
+        const projectError: ProjectError = {
+          message: readable.message,
+          code: readable.code,
+          details: readable.details,
+          setupInstructions: readable.setupInstructions,
+          at: nowIso()
+        };
+        await projectStore.failProject(projectId, projectError);
+      }
+    }
+
+    return this.requireProject(projectId);
   }
 
   async refreshDeployment(projectId: string, githubSessionId: string) {
@@ -261,6 +348,181 @@ export class Orchestrator {
     }
   }
 
+  private async processInputStep(projectId: string, signal: AbortSignal) {
+    const { input } = await this.requireActiveContext(projectId);
+    const requirements = await inputProcessor.process(input, signal);
+    await this.throwIfStopped(projectId, signal);
+
+    await projectStore.updateProject(projectId, (current) => {
+      current.name = requirements.projectName || current.name;
+      current.summary = requirements.summary || current.summary;
+      const targetInput = current.inputs.find((item) => item.id === input.id);
+      if (targetInput) targetInput.structuredRequirements = requirements;
+    });
+    await projectStore.addAction(projectId, "Generated structured product requirements", "success");
+    await projectStore.setStatus(
+      projectId,
+      "GENERATING_PROMPT",
+      "Generating Codex prompt",
+      "Creating architecture and implementation prompt"
+    );
+  }
+
+  private async generatePromptStep(projectId: string, signal: AbortSignal) {
+    const { input, kind } = await this.requireActiveContext(projectId);
+    if (!input.structuredRequirements) {
+      throw new AppError("Structured requirements are missing for this run.", {
+        statusCode: 409,
+        code: "STRUCTURED_REQUIREMENTS_MISSING"
+      });
+    }
+
+    const previousFiles = kind === "edit" ? await this.loadGeneratedFiles(projectId) : [];
+    const promptPlan = await promptArchitect.createPromptPlan(
+      input.structuredRequirements,
+      kind,
+      previousFiles,
+      input.text,
+      signal
+    );
+    await this.throwIfStopped(projectId, signal);
+
+    await projectStore.updateProject(projectId, (current) => {
+      const targetInput = current.inputs.find((item) => item.id === input.id);
+      if (targetInput) targetInput.codexPrompt = promptPlan;
+    });
+    await projectStore.addAction(projectId, "Generated structured Codex prompt", "success");
+    await projectStore.setStatus(
+      projectId,
+      "SENDING_TO_CODEX",
+      "Submitting prompt to Codex",
+      "Sent prompt to Codex"
+    );
+  }
+
+  private async codexGenerationStep(projectId: string, signal: AbortSignal) {
+    const { input, kind } = await this.requireActiveContext(projectId);
+    if (!input.structuredRequirements || !input.codexPrompt) {
+      throw new AppError("Codex prompt data is missing for this run.", {
+        statusCode: 409,
+        code: "CODEX_PROMPT_MISSING"
+      });
+    }
+
+    const previousFiles = kind === "edit" ? await this.loadGeneratedFiles(projectId) : [];
+    const { runId, generated } = await codexRunner.generateProject(
+      input.structuredRequirements,
+      input.codexPrompt,
+      previousFiles,
+      signal
+    );
+    await this.throwIfStopped(projectId, signal);
+
+    await this.saveGeneratedProject(projectId, generated);
+    await projectStore.updateProject(projectId, (current) => {
+      current.codexRunId = runId;
+    });
+    await projectStore.addAction(
+      projectId,
+      "Codex generated " + generated.files.length + " project files",
+      "success"
+    );
+    await projectStore.setStatus(
+      projectId,
+      "SAVING_TO_GITHUB",
+      "Saving files to GitHub",
+      "Preparing GitHub repository"
+    );
+  }
+
+  private async githubSaveAndDeployStep(
+    projectId: string,
+    githubSessionId: string,
+    signal: AbortSignal
+  ) {
+    const { input, kind } = await this.requireActiveContext(projectId);
+    if (!input.structuredRequirements) {
+      throw new AppError("Structured requirements are missing for GitHub save.", {
+        statusCode: 409,
+        code: "STRUCTURED_REQUIREMENTS_MISSING"
+      });
+    }
+
+    const generated = await this.loadGeneratedProject(projectId);
+    const currentProject = await this.requireProject(projectId);
+    const repository = await githubManager.ensureRepository(
+      currentProject,
+      input.structuredRequirements.repositoryNameSuggestion,
+      githubSessionId,
+      signal
+    );
+    await this.throwIfStopped(projectId, signal);
+
+    await projectStore.updateProject(projectId, (current) => {
+      current.githubOwner = repository.owner;
+      current.githubRepo = repository.repo;
+      current.githubRepoUrl = repository.url;
+      current.githubDefaultBranch = repository.branch;
+    });
+
+    const commitSha = await githubManager.commitFiles({
+      owner: repository.owner,
+      repo: repository.repo,
+      branch: repository.branch,
+      files: generated.files,
+      previousPaths: currentProject.lastCommittedPaths,
+      message:
+        kind === "create"
+          ? "Create project from deployRocket"
+          : "Update project from deployRocket",
+      sessionId: githubSessionId,
+      signal
+    });
+    await this.throwIfStopped(projectId, signal);
+
+    await projectStore.updateProject(projectId, (current) => {
+      current.githubLastCommitSha = commitSha;
+      current.lastCommittedPaths = generated.files.map((file) => file.path);
+    });
+    await projectStore.addAction(projectId, "Files committed to GitHub", "success", commitSha);
+
+    await projectStore.setStatus(
+      projectId,
+      "DEPLOYING",
+      "Configuring GitHub Pages",
+      "GitHub Pages deployment started"
+    );
+
+    await githubManager.enablePages(repository.owner, repository.repo, githubSessionId, signal);
+    await projectStore.addAction(projectId, "GitHub Pages configured for workflow deployment", "success");
+
+    const dispatched = await githubManager.dispatchPagesWorkflow(
+      repository.owner,
+      repository.repo,
+      repository.branch,
+      githubSessionId,
+      signal
+    );
+    await projectStore.updateProject(projectId, (current) => {
+      current.pagesDispatchRequestedAt = nowIso();
+    });
+    await projectStore.addAction(
+      projectId,
+      dispatched
+        ? "Triggered GitHub Pages workflow"
+        : "Waiting for push-triggered GitHub Pages workflow",
+      "info"
+    );
+  }
+
+  private async clearServerlessRun(projectId: string) {
+    await projectStore.updateProject(projectId, (current) => {
+      delete current.activeInputId;
+      delete current.activeRunKind;
+      delete current.pagesDispatchRequestedAt;
+    });
+  }
+
   private async ensureSetup(projectId: string, githubSessionId: string, signal: AbortSignal) {
     const status = await githubManager.getSetupStatus(githubSessionId);
 
@@ -351,30 +613,94 @@ export class Orchestrator {
     return project;
   }
 
-  private async loadGeneratedFiles(projectId: string): Promise<GeneratedFile[]> {
-    try {
-      const raw = await fs.readFile(this.generatedPath(projectId), "utf8");
-      const parsed = JSON.parse(raw) as GeneratedProject;
-      return parsed.files ?? [];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
+  private async requireActiveContext(projectId: string) {
+    const project = await this.requireProject(projectId);
+    const inputId = project.activeInputId ?? project.inputs.at(-1)?.id;
+    const input = project.inputs.find((item) => item.id === inputId);
+    if (!input) {
+      throw new AppError("Input record not found for the active run.", {
+        statusCode: 404,
+        code: "INPUT_NOT_FOUND"
+      });
     }
+
+    return {
+      project,
+      input,
+      kind: project.activeRunKind ?? input.kind
+    };
+  }
+
+  private async loadGeneratedProject(projectId: string): Promise<GeneratedProject> {
+    const project = await this.requireProject(projectId);
+    if (!project.githubOwner || !project.githubRepo) {
+      return {
+        files: [],
+        implementationSummary: "",
+        setupNotes: [],
+        warnings: []
+      };
+    }
+
+    const file = await githubManager.getTextFile(
+      project.githubOwner,
+      project.githubRepo,
+      this.generatedKey("latest"),
+      config.githubStateBranch
+    );
+    if (!file) {
+      return {
+        files: [],
+        implementationSummary: "",
+        setupNotes: [],
+        warnings: []
+      };
+    }
+    return JSON.parse(file.content) as GeneratedProject;
+  }
+
+  private async loadGeneratedFiles(projectId: string): Promise<GeneratedFile[]> {
+    const project = await this.requireProject(projectId);
+    if (project.githubOwner && project.githubRepo && project.lastCommittedPaths.length > 0) {
+      return githubManager.readTextFiles(
+        project.githubOwner,
+        project.githubRepo,
+        project.githubDefaultBranch ?? config.githubDefaultBranch,
+        project.lastCommittedPaths
+      );
+    }
+
+    const parsed = await this.loadGeneratedProject(projectId);
+    return parsed.files ?? [];
   }
 
   private async saveGeneratedProject(projectId: string, generated: GeneratedProject) {
-    const projectDir = path.join(paths.generatedDir, projectId);
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(this.generatedPath(projectId), `${JSON.stringify(generated, null, 2)}\n`, "utf8");
-    await fs.writeFile(
-      path.join(projectDir, `${createId("generation")}.json`),
-      `${JSON.stringify(generated, null, 2)}\n`,
-      "utf8"
-    );
+    const project = await this.requireProject(projectId);
+    if (!project.githubOwner || !project.githubRepo) return;
+
+    const content = JSON.stringify(generated, null, 2);
+    await githubManager.putTextFile({
+      owner: project.githubOwner,
+      repo: project.githubRepo,
+      path: this.generatedKey("latest"),
+      branch: config.githubStateBranch,
+      baseBranch: project.githubDefaultBranch ?? config.githubDefaultBranch,
+      content,
+      message: "Update generated deployRocket file snapshot"
+    });
+    await githubManager.putTextFile({
+      owner: project.githubOwner,
+      repo: project.githubRepo,
+      path: this.generatedKey(createId("generation") + ".json"),
+      branch: config.githubStateBranch,
+      baseBranch: project.githubDefaultBranch ?? config.githubDefaultBranch,
+      content,
+      message: "Archive generated deployRocket file snapshot"
+    });
   }
 
-  private generatedPath(projectId: string) {
-    return path.join(paths.generatedDir, projectId, "latest.json");
+  private generatedKey(name: string) {
+    return "generated/" + name + (name.endsWith(".json") ? "" : ".json");
   }
 }
 

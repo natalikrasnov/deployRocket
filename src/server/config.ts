@@ -5,12 +5,16 @@ import path from "node:path";
 dotenv.config();
 
 const rootDir = process.cwd();
+const isServerlessRuntime = process.env.SERVERLESS === "true" || process.env.VERCEL === "1";
+const writableRootDir = isServerlessRuntime
+  ? path.join(process.env.TMPDIR ?? "/tmp", "deployrocket")
+  : rootDir;
 
 export const paths = {
   rootDir,
-  dataDir: path.join(rootDir, "data"),
-  uploadsDir: path.join(rootDir, "uploads"),
-  generatedDir: path.join(rootDir, "data", "generated"),
+  dataDir: path.join(writableRootDir, "data"),
+  uploadsDir: path.join(writableRootDir, "uploads"),
+  generatedDir: path.join(writableRootDir, "generated"),
   clientDistDir: path.join(rootDir, "dist", "client")
 };
 
@@ -29,6 +33,16 @@ export const config = {
     process.env.GITHUB_CALLBACK_URL?.trim() || "http://localhost:3000/auth/github/callback",
   sessionSecret: process.env.SESSION_SECRET?.trim() || "replace-this-session-secret",
   githubDefaultBranch: process.env.GITHUB_DEFAULT_BRANCH ?? "main",
+  isServerless: isServerlessRuntime,
+  githubProjectTopic: process.env.GITHUB_PROJECT_TOPIC?.trim() || "deployrocket-project",
+  githubStateBranch: process.env.GITHUB_STATE_BRANCH?.trim() || "deployrocket-state",
+  frontendOrigins: (
+    process.env.FRONTEND_ORIGIN ?? "http://localhost:5173,http://127.0.0.1:5173"
+  )
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  frontendUrl: process.env.FRONTEND_URL?.trim() ?? "",
   isProduction: process.env.NODE_ENV === "production"
 };
 
@@ -42,7 +56,6 @@ export function getMissingConfig() {
   if (!config.sessionSecret || config.sessionSecret === "replace-this-session-secret") {
     missing.push("SESSION_SECRET");
   }
-
   return missing;
 }
 

@@ -67,5 +67,4 @@ export const setupHelp = {
     "Disconnect GitHub from this app, then connect again.",
     "Confirm the OAuth app has repo and workflow permissions.",
     "Retry after the new token is stored."
-  ]
-};
+  ]};

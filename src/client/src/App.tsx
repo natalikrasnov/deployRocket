@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, ApiError } from "./api";
+import { api, apiUrl, ApiError } from "./api";
 import type { Project, ProjectStatus, SetupStatus } from "@shared/types";
 
 type View =
@@ -109,9 +109,9 @@ export default function App() {
   }, [projects, view]);
 
   const refreshAll = useCallback(async () => {
-    const [nextSetup, nextProjects] = await Promise.all([api.getSetup(), api.listProjects()]);
+    const nextSetup = await api.getSetup();
     setSetup(nextSetup);
-    setProjects(nextProjects);
+    setProjects(nextSetup.githubConnected ? await api.listProjects() : []);
   }, []);
 
   useEffect(() => {
@@ -121,20 +121,39 @@ export default function App() {
   }, [refreshAll]);
 
   useEffect(() => {
-    const interval = setInterval(async () => {
+    let inFlight = false;
+    let cancelled = false;
+
+    const load = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         if (view.name === "detail" || view.name === "edit") {
-          const project = await api.getProject(view.projectId);
-          setProjects((current) => upsertProject(current, project));
+          const currentProject = await api.getProject(view.projectId);
+          const project = isRunning(currentProject)
+            ? await api.runProject(view.projectId)
+            : currentProject;
+          if (!cancelled) setProjects((current) => upsertProject(current, project));
         } else {
-          setProjects(await api.listProjects());
+          const nextSetup = await api.getSetup();
+          if (!cancelled) setSetup(nextSetup);
+          const nextProjects = nextSetup.githubConnected ? await api.listProjects() : [];
+          if (!cancelled) setProjects(nextProjects);
         }
       } catch (error) {
-        setNotice(readError(error));
+        if (!cancelled) setNotice(readError(error));
+      } finally {
+        inFlight = false;
       }
-    }, view.name === "dashboard" ? 5000 : 2200);
+    };
 
-    return () => clearInterval(interval);
+    void load();
+    const interval = setInterval(load, view.name === "dashboard" ? 5000 : 2200);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [view]);
 
   const openProject = (project: Project) => {
@@ -400,7 +419,7 @@ function SetupBanner({
       </div>
       {setup.githubOAuthConfigured ? (
         <a
-          href="/auth/github"
+          href={apiUrl("/auth/github")}
           className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-purple-300 px-3 text-sm font-semibold text-zinc-950 shadow-glow-purple"
         >
           <Github size={16} />

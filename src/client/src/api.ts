@@ -1,5 +1,11 @@
 import type { Project, SetupStatus } from "@shared/types";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+
+export function apiUrl(path: string) {
+  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+}
+
 interface ApiErrorPayload {
   error?: {
     message?: string;
@@ -26,7 +32,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     credentials: "include",
     ...options,
     headers: {
@@ -72,6 +78,11 @@ export const api = {
     }),
   stopProject: (id: string) =>
     request<Project>(`/api/projects/${id}/stop`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  runProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/run`, {
       method: "POST",
       body: JSON.stringify({})
     }),

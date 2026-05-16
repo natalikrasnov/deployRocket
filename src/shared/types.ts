@@ -119,6 +119,9 @@ export interface Project {
   inputs: ProjectInputRecord[];
   deployments: DeploymentRecord[];
   lastCommittedPaths: string[];
+  activeInputId?: string;
+  activeRunKind?: "create" | "edit";
+  pagesDispatchRequestedAt?: string;
 }
 
 export interface JsonDatabase {

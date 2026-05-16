@@ -14,9 +14,9 @@ This is not a chat app. The chat-like composer is only used to create or edit st
 - Commits generated files to GitHub.
 - Configures GitHub Pages with a GitHub Actions deployment workflow.
 - Polls real GitHub Actions and Pages state until the project is live or failed.
-- Persists projects, actions, errors, inputs, deployment history, and OAuth state in local JSON files.
+- Stores project status, prompts, architecture, actions, errors, and deployment history in each project repo on the `deployrocket-state` branch.
 
-There is no mock mode and no fake status path. Missing credentials, invalid tokens, Codex failures, GitHub errors, and deployment failures are stored as readable project errors.
+There is no mock mode and no fake status path. Missing credentials, invalid tokens, Codex failures, GitHub errors, and deployment failures are written as readable project errors in the GitHub dossier.
 
 ## Stack
 
@@ -25,7 +25,7 @@ There is no mock mode and no fake status path. Missing credentials, invalid toke
 - TypeScript
 - TailwindCSS
 - Express
-- Local JSON persistence
+- GitHub-owned project state with `deployrocket-state` README dossiers
 - GitHub OAuth with per-session customer authorization
 - OpenAI Responses API with a Codex coding model
 - GitHub REST API and GitHub Pages Actions deployment
@@ -64,6 +64,24 @@ GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
 SESSION_SECRET=
 
 GITHUB_DEFAULT_BRANCH=main
+
+# Serverless mode exports the API as a function and stores project state in GitHub.
+SERVERLESS=false
+GITHUB_PROJECT_TOPIC=deployrocket-project
+GITHUB_STATE_BRANCH=deployrocket-state
+
+# Comma-separated frontend origins allowed to call the API.
+# Origins do not include paths. For GitHub Pages use: https://YOUR_USERNAME.github.io
+FRONTEND_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
+
+# Public frontend app URL used after GitHub OAuth redirects.
+# For GitHub Pages include the repository path, for example:
+# https://YOUR_USERNAME.github.io/deployRocket/
+FRONTEND_URL=
+
+# Public backend URL used by the static GitHub Pages frontend.
+# Leave empty for local same-origin/dev-proxy usage.
+VITE_API_BASE_URL=
 ```
 
 Optional model overrides:
@@ -91,6 +109,56 @@ The app requests these OAuth scopes:
 - `user:email`
 
 The repository is created in the connected customer account. It is public by default so GitHub Pages can deploy without requiring a paid private Pages setup.
+
+## Serverless Deployment
+
+deployRocket can run as a serverless Vercel app. The React frontend is static, and the API is exposed through `api/index.ts`. The app does not require a database: each customer project is a GitHub repository tagged with `deployrocket-project`, and its live state is stored in a human-readable `README.md` on the repo's `deployrocket-state` branch.
+
+Recommended Vercel environment:
+
+```bash
+SERVERLESS=true
+GITHUB_PROJECT_TOPIC=deployrocket-project
+GITHUB_STATE_BRANCH=deployrocket-state
+
+OPENAI_API_KEY=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_CALLBACK_URL=https://your-vercel-app.vercel.app/auth/github/callback
+SESSION_SECRET=your-long-random-secret
+FRONTEND_ORIGIN=https://your-vercel-app.vercel.app
+FRONTEND_URL=https://your-vercel-app.vercel.app/
+```
+
+For same-origin Vercel hosting, leave `VITE_API_BASE_URL` empty. If you keep the frontend on GitHub Pages and use Vercel only for the API, set `VITE_API_BASE_URL=https://your-vercel-app.vercel.app`, set `FRONTEND_ORIGIN=https://your-github-username.github.io`, and set `FRONTEND_URL=https://your-github-username.github.io/deployRocket/`.
+
+Update the GitHub OAuth App callback URL to the same `GITHUB_CALLBACK_URL` value. Serverless orchestration advances through the polling endpoint `POST /api/projects/:id/run`, so Codex generation, GitHub commits, and Pages deployment status continue without relying on a long-lived Express process.
+
+The dashboard rebuilds itself by searching the connected user's GitHub account for repositories with the `deployrocket-project` topic, then reading the dossier README from `deployrocket-state`. Generated project code remains on `main`; deployRocket status updates stay off the deployment branch.
+
+## Deploying A Separate Backend
+
+GitHub Pages only hosts the static React frontend. It cannot run the Express API, OAuth callback, OpenAI calls, or GitHub orchestration. If you do not use the Vercel serverless setup, run the backend on Render, Railway, Fly.io, a VPS, or another Node-capable host.
+
+Set the hosted backend origin in the frontend build as:
+
+```bash
+VITE_API_BASE_URL=https://your-backend.example.com
+```
+
+Also update the GitHub OAuth App callback URL and backend .env to match the hosted backend:
+
+```bash
+GITHUB_CALLBACK_URL=https://your-backend.example.com/auth/github/callback
+FRONTEND_ORIGIN=https://your-github-username.github.io
+FRONTEND_URL=https://your-github-username.github.io/deployRocket/
+```
+
+`FRONTEND_ORIGIN` is only the origin, without `/deployRocket`. `FRONTEND_URL` is the full app URL used after GitHub login. In production the backend should run on HTTPS so browser session cookies work across the GitHub Pages frontend and the API server.
+
+If the static frontend is deployed by the included GitHub Actions workflow, set a repository Actions variable named `VITE_API_BASE_URL` to your hosted backend URL, then rerun the Pages workflow.
+
+Local development can leave `VITE_API_BASE_URL` empty because Vite proxies `/api` and `/auth` to `localhost:3000`.
 
 ## GitHub Pages Setup
 
@@ -148,18 +216,17 @@ npm start
 
 After `npm run build`, Express serves the compiled frontend from `dist/client`.
 
-## Local Persistence
+## GitHub Project Memory
 
-Runtime data is written under:
+Runtime project memory is owned by the connected customer's GitHub account. Each deployRocket project is a GitHub repository tagged with `deployrocket-project`. The generated app code lives on the normal deployment branch, while deployRocket writes status and orchestration memory to:
 
 ```text
-data/db.json
-data/auth.json
-data/generated/
-uploads/
+branch: deployrocket-state
+file: README.md
+optional generated snapshot files: generated/*.json
 ```
 
-These paths are ignored by git. GitHub OAuth tokens are stored per browser session in `data/auth.json`; one customer session does not become the global GitHub account for every user. Existing projects persist after backend restart. If the backend restarts during an active run, the app marks the interrupted project as `STOPPED` with a readable action history entry.
+The dossier README contains a stable `deployrocket-state-json` block for agents plus readable sections for current stage, completion, original prompt, architecture, action history, deployment URL, and latest errors. GitHub OAuth tokens are stored only in encrypted HttpOnly browser cookies, not in app storage.
 
 ## Project Lifecycle
 
