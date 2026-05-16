@@ -7,7 +7,7 @@ import { githubManager } from "./githubManager.js";
 import { inputProcessor } from "./inputProcessor.js";
 import { pagesDeployManager } from "./pagesDeployManager.js";
 import { promptArchitect } from "./promptArchitect.js";
-import type { GeneratedFile, GeneratedProject, Project, ProjectError } from "../../shared/types.js";
+import type { GeneratedFile, GeneratedProject, Project, ProjectError, StructuredRequirements } from "../../shared/types.js";
 
 interface ActiveRun {
   controller: AbortController;
@@ -142,7 +142,7 @@ export class Orchestrator {
   }
 
   async continueFailedRun(projectId: string, githubSessionId: string) {
-    const project = await this.requireProject(projectId);
+    let project = await this.requireProject(projectId);
     if (project.status !== "FAILED") {
       throw new AppError("Only failed projects can be continued.", {
         statusCode: 409,
@@ -150,7 +150,17 @@ export class Orchestrator {
       });
     }
 
-    const input = project.inputs.at(-1);
+    let input = project.inputs.at(-1);
+    if (!input) {
+      throw new AppError("No project input is available to continue from.", {
+        statusCode: 409,
+        code: "CONTINUE_INPUT_MISSING"
+      });
+    }
+
+    project = await this.renameProjectForContinuation(project, githubSessionId);
+    projectId = project.id;
+    input = project.inputs.at(-1);
     if (!input) {
       throw new AppError("No project input is available to continue from.", {
         statusCode: 409,
@@ -637,6 +647,36 @@ export class Orchestrator {
     }
   }
 
+  private async renameProjectForContinuation(project: Project, githubSessionId: string) {
+    const requirements = project.inputs.at(-1)?.structuredRequirements;
+    if (!requirements) return project;
+
+    try {
+      const repository = await githubManager.renameDeployRocketRepository(
+        project,
+        repositoryNameFor(requirements, project),
+        githubSessionId
+      );
+      if (!repository || repository.repo === project.githubRepo) return project;
+
+      return await projectStore.adoptRepository(
+        project,
+        repository,
+        "Rename deployRocket project repository",
+        "Renamed GitHub repository to " + repository.repo
+      );
+    } catch (error) {
+      const readable = toReadableError(error);
+      await projectStore.addAction(
+        project.id,
+        "Could not rename GitHub repository automatically",
+        "warning",
+        readable.message
+      );
+      return project;
+    }
+  }
+
   private async chooseContinueStatus(projectId: string, project: Project) {
     const input = project.inputs.at(-1);
     if (!input?.structuredRequirements) return "PROCESSING_INPUT" as const;
@@ -894,6 +934,10 @@ export class Orchestrator {
   private generatedKey(name: string) {
     return "generated/" + name + (name.endsWith(".json") ? "" : ".json");
   }
+}
+
+function repositoryNameFor(requirements: StructuredRequirements, project: Project) {
+  return requirements.repositoryNameSuggestion || requirements.projectName || project.name || project.githubRepo || "deployrocket-project";
 }
 
 function sleep(ms: number, signal: AbortSignal) {

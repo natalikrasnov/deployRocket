@@ -172,6 +172,23 @@ class ProjectStore {
     });
   }
 
+  async adoptRepository(
+    project: Project,
+    repository: { owner: string; repo: string; url: string; branch: string },
+    message: string,
+    actionMessage?: string
+  ) {
+    project.id = projectIdFor(repository.owner, repository.repo);
+    project.githubOwner = repository.owner;
+    project.githubRepo = repository.repo;
+    project.githubRepoUrl = repository.url;
+    project.githubDefaultBranch = repository.branch;
+    if (actionMessage) this.pushAction(project, actionMessage, "success", project.status, repository.url);
+    project.updatedAt = nowIso();
+    await this.writeProject(project, message);
+    return clone(project);
+  }
+
   async recoverInterruptedProjects() {
     return [] as Project[];
   }
@@ -235,8 +252,48 @@ class ProjectStore {
 function suggestRepositoryName(input: ProjectInputRecord) {
   const text = input.text.trim();
   if (!text) return "deployrocket-image-project";
-  const words = text.split(/\s+/).slice(0, 8).join(" ");
-  return slugify(words, "deployrocket-project");
+
+  const normalized = text
+    .toLowerCase()
+    .replace(/mirrow/g, "mirror")
+    .replace(/beckground/g, "background")
+    .replace(/difrent/g, "different")
+    .replace(/desaight/g, "decide");
+
+  if (/\bmirror\b/.test(normalized) && /\bcloset\b/.test(normalized)) {
+    return normalized.includes("mood") ? "mood-mirror-closet" : "virtual-mirror-closet";
+  }
+
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "app",
+    "application",
+    "as",
+    "build",
+    "client",
+    "create",
+    "for",
+    "from",
+    "in",
+    "make",
+    "of",
+    "serverless",
+    "the",
+    "to",
+    "user",
+    "with"
+  ]);
+  const preferred = ["mirror", "closet", "camera", "mood", "outfit", "virtual", "background", "agent", "dashboard", "tracker"];
+  const words = normalized
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2 && !stopWords.has(word));
+  const selected = [...preferred.filter((word) => words.includes(word)), ...words]
+    .filter((word, index, all) => all.indexOf(word) === index)
+    .slice(0, 5);
+
+  return slugify(selected.join("-"), "deployrocket-project");
 }
 
 function parseDossier(markdown: string): Project | null {
@@ -260,7 +317,9 @@ function renderDossier(project: Project) {
   return [
     "# deployRocket Project Dossier",
     "",
-    "This branch is managed by deployRocket. It is the machine-readable and human-readable project memory for agents, status screens, and redeploys.",
+    "This branch is managed by deployRocket. It intentionally stores only this dossier README as machine-readable and human-readable project memory.",
+    "",
+    "Generated application files are committed to the repository default branch after Codex returns a valid file set. If the default branch only has an initial README, code generation has not succeeded yet.",
     "",
     "## Agent State",
     "",
@@ -283,6 +342,10 @@ function renderDossier(project: Project) {
     "Summary: " + project.summary,
     "",
     "Repository: " + (project.githubRepoUrl ?? "pending"),
+    "",
+    "Code branch: " + (project.githubDefaultBranch ?? config.githubDefaultBranch),
+    "",
+    "State branch: " + config.githubStateBranch,
     "",
     "Live URL: " + (project.githubPagesUrl ?? "pending"),
     "",
@@ -318,27 +381,51 @@ function renderStages(project: Project) {
     ["DEPLOYING", "Deployed to GitHub Pages"],
     ["LIVE", "Verified live URL"]
   ];
-  const order = [
-    "IDLE",
+
+  return [
+    "| Stage | State |",
+    "| --- | --- |",
+    ...stages.map(([status, label]) => "| " + label + " | " + stageState(project, status) + " |")
+  ].join("\n");
+}
+
+function stageState(project: Project, stage: ProjectStatus | "RECEIVED") {
+  if (stage === "RECEIVED") return "done";
+  if (project.status === "LIVE") return "done";
+
+  const order: Array<ProjectStatus | "RECEIVED"> = [
+    "RECEIVED",
     "PROCESSING_INPUT",
     "GENERATING_PROMPT",
-    "SENDING_TO_CODEX",
     "CODEX_WORKING",
     "SAVING_TO_GITHUB",
     "DEPLOYING",
     "LIVE"
   ];
-  const currentIndex = order.indexOf(project.status);
+  const active = normalizeStage(project.status === "FAILED" ? latestWorkingStatus(project) : project.status);
+  const stageIndex = order.indexOf(stage);
+  const activeIndex = order.indexOf(active);
 
-  return stages
-    .map(([status, label]) => {
-      const checked =
-        status === "RECEIVED" ||
-        project.status === "LIVE" ||
-        (typeof status === "string" && order.indexOf(status as ProjectStatus) < currentIndex);
-      return "- [" + (checked ? "x" : " ") + "] " + label;
-    })
-    .join("\n");
+  if (project.status === "FAILED" && stage === active) return "failed";
+  if (project.status === "STOPPED" && stage === active) return "stopped";
+  if (activeIndex > -1 && stageIndex < activeIndex) return "done";
+  if (activeIndex > -1 && stageIndex === activeIndex) return project.status === "FAILED" ? "failed" : "current";
+  return "pending";
+}
+
+function latestWorkingStatus(project: Project) {
+  return (
+    [...project.actions]
+      .reverse()
+      .find((action) => action.status && action.status !== "FAILED" && action.status !== "STOPPED")
+      ?.status ?? "IDLE"
+  );
+}
+
+function normalizeStage(status: ProjectStatus | "RECEIVED") {
+  if (status === "SENDING_TO_CODEX") return "CODEX_WORKING";
+  if (status === "IDLE") return "RECEIVED";
+  return status;
 }
 
 export const projectStore = new ProjectStore();

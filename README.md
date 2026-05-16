@@ -161,7 +161,9 @@ FRONTEND_URL=https://your-github-username.github.io/deployRocket/
 
 `FRONTEND_ORIGIN` is only the origin, without `/deployRocket`. `FRONTEND_URL` is the full app URL used after GitHub login. In production the backend should run on HTTPS so browser session cookies work across the GitHub Pages frontend and the API server.
 
-If the static frontend is deployed by the included GitHub Actions workflow, set a repository Actions variable named `VITE_API_BASE_URL` to your hosted backend URL, then rerun the Pages workflow.
+If the static frontend is deployed by the included GitHub Actions workflow, set a repository Actions variable named `VITE_API_BASE_URL` to your hosted backend URL, then rerun the Pages workflow. The workflow also accepts an Actions secret with the same name, but this value is public in the built JavaScript bundle, so an Actions variable is preferred.
+
+If the production GitHub Pages app shows no GitHub sign-in, check `VITE_API_BASE_URL` first. A blank value means the static page is trying to call GitHub Pages itself for `/api/setup`, but GitHub Pages cannot host the API or OAuth callback.
 
 Local development can leave `VITE_API_BASE_URL` empty because Vite proxies `/api` and `/auth` to `localhost:3000`.
 

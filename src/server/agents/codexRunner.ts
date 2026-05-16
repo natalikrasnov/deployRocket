@@ -16,7 +16,7 @@ const EncodedGeneratedProjectSchema = z.object({
       path: z.string(),
       contentBase64: z.string()
     })
-  ),
+  ).min(1),
   implementationSummary: z.string(),
   setupNotes: z.array(z.string()),
   warnings: z.array(z.string())
@@ -78,7 +78,10 @@ export class CodexRunner {
               "The target deployment platform is GitHub Pages using GitHub Actions.",
               "The project must be a static Vite React TypeScript application.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
-              "Keep the project compact enough to build quickly while satisfying the request."
+              "Keep the project compact enough to build quickly while satisfying the request.",
+              "Prefer a complete compact v1 over a sprawling multi-file app that risks truncation.",
+              "For broad product requests, implement the core flows in 6 to 14 source files using local browser state or localStorage.",
+              "Do not include binary image assets; use CSS gradients, inline data objects, and generated visual treatments."
             ].join("\n")
           },
           {
@@ -97,6 +100,7 @@ export class CodexRunner {
                 : "No failed-run continuation context is present.",
               "",
               "Required file expectations:",
+              "- Return at least one real application file; a response with zero files is invalid.",
               "- package.json with dev, build, and preview scripts.",
               "- index.html.",
               "- src/main.tsx.",
@@ -116,7 +120,7 @@ export class CodexRunner {
           format: zodTextFormat(EncodedGeneratedProjectSchema, "generated_project")
         },
         reasoning: { effort: "high" },
-        max_output_tokens: 22000
+        max_output_tokens: 30000
       },
       { signal }
     );
@@ -136,9 +140,13 @@ export class CodexRunner {
     const parsed = response.output_parsed as EncodedGeneratedProject | null;
 
     if (!parsed) {
-      throw new AppError("Codex returned no generated project files.", {
-        code: "CODEX_MALFORMED_RESPONSE",
-        statusCode: 502
+      throw new AppError("Codex did not return the structured generated-file payload.", {
+        code: "CODEX_EMPTY_RESPONSE",
+        statusCode: 502,
+        setupInstructions: [
+          "Use Continue Mission to retry with the existing prompt and error context.",
+          "If this repeats, simplify the request or ask for a compact first version before adding advanced features."
+        ]
       });
     }
 

@@ -23,8 +23,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, apiUrl, ApiError } from "./api";
-import type { Project, ProjectStatus, SetupStatus } from "@shared/types";
+import { api, apiBaseUrl, apiUrl, ApiError, isStaticFrontendWithoutApiBase } from "./api";
+import type { ActionLevel, Project, ProjectStatus, SetupStatus } from "@shared/types";
 
 type View =
   | { name: "dashboard" }
@@ -78,6 +78,29 @@ const statusTone: Record<ProjectStatus, string> = {
   STOPPED: "border-zinc-500/50 bg-zinc-500/10 text-zinc-200"
 };
 
+const actionTone: Record<ActionLevel, { dot: string; card: string; icon: "check" | "alert" | "circle" }> = {
+  info: {
+    dot: "border-cyan-400/35 bg-cyan-400/10 text-cyan-300",
+    card: "border-white/5 bg-white/[0.02]",
+    icon: "circle"
+  },
+  success: {
+    dot: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300",
+    card: "border-emerald-400/10 bg-emerald-400/[0.03]",
+    icon: "check"
+  },
+  warning: {
+    dot: "border-amber-300/35 bg-amber-300/10 text-amber-200",
+    card: "border-amber-300/15 bg-amber-300/[0.04]",
+    icon: "alert"
+  },
+  error: {
+    dot: "border-rose-400/40 bg-rose-400/10 text-rose-200",
+    card: "border-rose-400/25 bg-rose-400/[0.06]",
+    icon: "alert"
+  }
+};
+
 function isRunning(project?: Project | null) {
   return Boolean(project && runningStatuses.includes(project.status));
 }
@@ -101,6 +124,7 @@ export default function App() {
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [confirmEdit, setConfirmEdit] = useState<Project | null>(null);
   const [popup, setPopup] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
@@ -112,12 +136,17 @@ export default function App() {
   const refreshAll = useCallback(async () => {
     const nextSetup = await api.getSetup();
     setSetup(nextSetup);
+    setSetupError(null);
     setProjects(nextSetup.githubConnected ? await api.listProjects() : []);
   }, []);
 
   useEffect(() => {
     refreshAll()
-      .catch((error) => setNotice(readError(error)))
+      .catch((error) => {
+        const message = readError(error);
+        setSetupError(message);
+        setNotice(message);
+      })
       .finally(() => setLoading(false));
   }, [refreshAll]);
 
@@ -155,7 +184,11 @@ export default function App() {
           if (!cancelled) setProjects(nextProjects);
         }
       } catch (error) {
-        if (!cancelled) setNotice(readError(error));
+        if (!cancelled) {
+          const message = readError(error);
+          if (view.name === "dashboard" || view.name === "new") setSetupError(message);
+          setNotice(message);
+        }
       } finally {
         inFlight = false;
       }
@@ -247,6 +280,8 @@ export default function App() {
                   await refreshAll();
                 }}
               />
+            ) : setupError ? (
+              <ApiConnectionBanner message={setupError} />
             ) : null}
 
             <section className="flex-1 pb-8 pt-4">
@@ -454,6 +489,39 @@ function SetupBanner({
         <a
           href={apiUrl("/auth/github")}
           className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-purple-300 px-3 text-sm font-semibold text-zinc-950 shadow-glow-purple"
+        >
+          <Github size={16} />
+          Connect GitHub
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function ApiConnectionBanner({ message }: { message: string }) {
+  const missingApiBase = isStaticFrontendWithoutApiBase();
+  return (
+    <div className="mt-4 rounded-lg border border-amber-300/35 bg-amber-300/10 p-3 text-sm text-amber-50 backdrop-blur-md">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 shrink-0 text-amber-200" size={18} />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">{missingApiBase ? "Backend API URL missing" : "Cannot reach deployRocket API"}</p>
+          <p className="mt-1 text-amber-50/80">{message}</p>
+          {missingApiBase ? (
+            <p className="mt-2 text-xs leading-5 text-amber-50/70">
+              GitHub Pages is static, so it cannot run OAuth or API routes itself. Set the Actions variable
+              <span className="mx-1 rounded bg-black/20 px-1.5 py-0.5 font-mono">VITE_API_BASE_URL</span>
+              to your hosted backend origin, then rerun the Pages workflow.
+            </p>
+          ) : (
+            <p className="mt-2 break-all text-xs text-amber-50/70">API base: {apiBaseUrl || window.location.origin}</p>
+          )}
+        </div>
+      </div>
+      {!missingApiBase ? (
+        <a
+          href={apiUrl("/auth/github")}
+          className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-amber-200 px-3 text-sm font-semibold text-zinc-950"
         >
           <Github size={16} />
           Connect GitHub
@@ -737,21 +805,28 @@ function ProjectDetails({
             <h3 className="text-lg font-semibold text-white">Deployment Timeline</h3>
             <span className="text-xs text-zinc-500">{project.actions.length} events</span>
           </div>
-          <div className="space-y-4 relative before:absolute before:inset-0 before:ml-[13px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/5 before:to-transparent">
-            {[...project.actions].reverse().map((action) => (
-              <div key={action.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                <div className="flex items-center justify-center w-7 h-7 rounded-full border border-white/5 bg-zinc-900 text-zinc-300 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow shadow-zinc-900 z-10">
-                  {action.level === "success" ? <CheckCircle2 size={14} className="text-emerald-400" /> : <Circle size={10} className="text-cyan-400" />}
-                </div>
-                <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-1.5rem)] p-3 rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-sm">
-                  <div className="flex items-start justify-between gap-3 mb-1">
-                    <p className="text-sm text-zinc-100 font-medium">{action.message}</p>
-                    <span className="shrink-0 text-xs text-zinc-500">{formatTime(action.at)}</span>
+          <div className="relative space-y-3 pl-9 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-gradient-to-b before:from-transparent before:via-white/10 before:to-transparent">
+            {[...project.actions].reverse().map((action) => {
+              const tone = actionTone[action.level];
+              return (
+                <div key={action.id} className="relative">
+                  <div className={`absolute -left-9 top-3 flex h-6 w-6 items-center justify-center rounded-full border shadow-lg ${tone.dot}`}>
+                    {tone.icon === "check" ? <CheckCircle2 size={14} /> : tone.icon === "alert" ? <AlertTriangle size={13} /> : <Circle size={9} />}
                   </div>
-                  {action.details ? <p className="text-xs text-zinc-400">{action.details}</p> : null}
+                  <div className={`rounded-lg border p-3 backdrop-blur-sm ${tone.card}`}>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                      <p className="min-w-0 text-sm font-medium leading-5 text-zinc-100">{action.message}</p>
+                      <span className="shrink-0 text-xs text-zinc-500">{formatTime(action.at)}</span>
+                    </div>
+                    {action.details ? (
+                      <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-white/5 bg-black/15 p-2 text-xs leading-5 text-zinc-400">
+                        {action.details}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

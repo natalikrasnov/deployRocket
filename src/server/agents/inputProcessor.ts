@@ -45,7 +45,8 @@ export class InputProcessor {
         type: "input_text",
         text: [
           "Convert this raw mobile project request into structured software requirements.",
-          "Infer a concise project name and summary.",
+          "Infer a concise product name, summary, and repository name.",
+          "repositoryNameSuggestion must be a clean GitHub slug based on the final product name, not raw instruction words like create/build/client/serverless.",
           "If images are present, use them as visual/product context.",
           "Do not invent credentials, external services, or impossible deployment capabilities.",
           "",
