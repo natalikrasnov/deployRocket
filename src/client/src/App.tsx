@@ -24,7 +24,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api, apiBaseUrl, apiUrl, ApiError, isStaticFrontendWithoutApiBase } from "./api";
-import type { ActionLevel, Project, ProjectStatus, SetupStatus } from "@shared/types";
+import type { ActionLevel, Project, ProjectAction, ProjectStatus, SetupStatus } from "@shared/types";
 
 type View =
   | { name: "dashboard" }
@@ -112,6 +112,24 @@ function formatTime(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+type TimelineAction = ProjectAction & { count: number; firstAt: string };
+
+function groupTimelineActions(actions: ProjectAction[]): TimelineAction[] {
+  const grouped = new Map<string, TimelineAction>();
+
+  for (const action of actions) {
+    const key = [action.level, action.message].join("::");
+    const existing = grouped.get(key);
+    if (existing) {
+      grouped.set(key, { ...action, count: existing.count + 1, firstAt: existing.firstAt });
+    } else {
+      grouped.set(key, { ...action, count: 1, firstAt: action.at });
+    }
+  }
+
+  return [...grouped.values()].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 }
 
 function statusLabel(status: ProjectStatus) {
@@ -774,6 +792,7 @@ function ProjectDetails({
   onContinue: () => Promise<void> | void;
 }) {
   const [continueBusy, setContinueBusy] = useState(false);
+  const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -803,10 +822,14 @@ function ProjectDetails({
         <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-5 shadow-xl flex-1">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-lg font-semibold text-white">Deployment Timeline</h3>
-            <span className="text-xs text-zinc-500">{project.actions.length} events</span>
+            <span className="text-xs text-zinc-500">
+              {timelineActions.length === project.actions.length
+                ? `${project.actions.length} events`
+                : `${timelineActions.length} shown / ${project.actions.length} events`}
+            </span>
           </div>
           <div className="relative space-y-3 pl-9 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-gradient-to-b before:from-transparent before:via-white/10 before:to-transparent">
-            {[...project.actions].reverse().map((action) => {
+            {timelineActions.map((action) => {
               const tone = actionTone[action.level];
               return (
                 <div key={action.id} className="relative">
@@ -815,7 +838,12 @@ function ProjectDetails({
                   </div>
                   <div className={`rounded-lg border p-3 backdrop-blur-sm ${tone.card}`}>
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                      <p className="min-w-0 text-sm font-medium leading-5 text-zinc-100">{action.message}</p>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium leading-5 text-zinc-100">{action.message}</p>
+                        {action.count > 1 ? (
+                          <p className="mt-1 text-xs text-zinc-500">Repeated {action.count} times since {formatTime(action.firstAt)}</p>
+                        ) : null}
+                      </div>
                       <span className="shrink-0 text-xs text-zinc-500">{formatTime(action.at)}</span>
                     </div>
                     {action.details ? (

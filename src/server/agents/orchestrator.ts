@@ -17,6 +17,15 @@ interface ActiveRun {
   githubSessionId: string;
 }
 
+function generationActionMessage(generated: GeneratedProject) {
+  const isRescueBuild = generated.warnings.some((warning) =>
+    warning.toLowerCase().includes("rescue") || warning.toLowerCase().includes("not parseable")
+  );
+  return isRescueBuild
+    ? `deployRocket generated ${generated.files.length} rescue project files`
+    : `Codex generated ${generated.files.length} project files`;
+}
+
 export class Orchestrator {
   private activeRuns = new Map<string, ActiveRun>();
 
@@ -265,6 +274,7 @@ export class Orchestrator {
         if (targetInput) targetInput.structuredRequirements = requirements;
       });
       await projectStore.addAction(projectId, "Generated structured product requirements", "success");
+      await projectStore.syncPendingDefaultReadme(projectId);
 
       await projectStore.setStatus(
         projectId,
@@ -314,11 +324,10 @@ export class Orchestrator {
       await projectStore.updateProject(projectId, (current) => {
         current.codexRunId = runId;
       });
-      await projectStore.addAction(
-        projectId,
-        `Codex generated ${generated.files.length} project files`,
-        "success"
-      );
+      await projectStore.addAction(projectId, generationActionMessage(generated), "success");
+      if (generated.warnings.length) {
+        await projectStore.addAction(projectId, "Generation completed with warnings", "warning", generated.warnings.join("\n"));
+      }
 
       await projectStore.setStatus(
         projectId,
@@ -423,6 +432,7 @@ export class Orchestrator {
       if (targetInput) targetInput.structuredRequirements = requirements;
     });
     await projectStore.addAction(projectId, "Generated structured product requirements", "success");
+    await projectStore.syncPendingDefaultReadme(projectId);
     await projectStore.setStatus(
       projectId,
       "GENERATING_PROMPT",
@@ -487,11 +497,10 @@ export class Orchestrator {
       current.codexRunId = runId;
       delete current.continueContext;
     });
-    await projectStore.addAction(
-      projectId,
-      "Codex generated " + generated.files.length + " project files",
-      "success"
-    );
+    await projectStore.addAction(projectId, generationActionMessage(generated), "success");
+    if (generated.warnings.length) {
+      await projectStore.addAction(projectId, "Generation completed with warnings", "warning", generated.warnings.join("\n"));
+    }
     await projectStore.setStatus(
       projectId,
       "SAVING_TO_GITHUB",
@@ -725,17 +734,17 @@ export class Orchestrator {
 
   private buildContinueContext(project: Project) {
     const latestInput = project.inputs.at(-1);
-    const actions = project.actions.slice(-30).map((action) => ({
+    const actions = project.actions.slice(-12).map((action) => ({
       at: action.at,
       message: action.message,
       level: action.level,
-      status: action.status,
-      details: action.details
+      status: action.status
     }));
 
     return JSON.stringify(
       {
-        instruction: "Continue this deployRocket project from the failed stage. Preserve the original intent and fix the latest failure.",
+        instruction: "Continue this deployRocket project from the failed stage. Preserve the original intent, but generate a compact complete v1 file set so the repository can receive real files.",
+        retryDirective: "Do not repeat the oversized previous output attempt. Produce a compact Vite React TypeScript app with package.json, index.html, src/main.tsx, src/App.tsx, src/styles.css, README.md, vite.config.ts, and tsconfig.json.",
         project: {
           name: project.name,
           summary: project.summary,
@@ -747,7 +756,13 @@ export class Orchestrator {
         latestError: project.error,
         originalInput: latestInput?.text,
         structuredRequirements: latestInput?.structuredRequirements,
-        codexPrompt: latestInput?.codexPrompt,
+        promptSummary: latestInput?.codexPrompt
+          ? {
+              title: latestInput.codexPrompt.title,
+              summary: latestInput.codexPrompt.summary,
+              acceptanceCriteria: latestInput.codexPrompt.acceptanceCriteria.slice(0, 6)
+            }
+          : undefined,
         actionHistory: actions
       },
       null,
