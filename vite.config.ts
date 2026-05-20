@@ -4,12 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
-const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1];
-const pagesBase = repositoryName ? "/" + repositoryName + "/" : "/";
 
 export default defineConfig({
   root: "src/client",
-  base: pagesBase,
+  base: "/",
   resolve: {
     alias: {
       "@shared": path.resolve(rootDir, "src/shared")

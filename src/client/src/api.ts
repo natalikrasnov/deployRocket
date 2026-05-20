@@ -46,12 +46,12 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(0, {
       error: {
         message:
-          "This GitHub Pages frontend is not connected to the deployRocket API. Set VITE_API_BASE_URL to your hosted backend URL and redeploy Pages.",
+          "This static frontend is not connected to the deployRocket API. Set VITE_API_BASE_URL to your hosted backend URL or deploy same-origin on Vercel.",
         code: "API_BASE_URL_MISSING",
         setupInstructions: [
           "Deploy the Express/Vercel API first.",
-          "Set the deployRocket repository Actions variable VITE_API_BASE_URL to that API origin, for example https://your-app.vercel.app.",
-          "Rerun the GitHub Pages workflow so the static frontend is rebuilt with the API URL."
+          "Set VITE_API_BASE_URL to that API origin, for example https://your-app.vercel.app.",
+          "For a same-origin Vercel deployment, leave VITE_API_BASE_URL empty."
         ]
       }
     });
@@ -76,7 +76,7 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
         setupInstructions: [
           "Confirm the backend is deployed and reachable over HTTPS.",
           "Confirm FRONTEND_ORIGIN allows this frontend origin.",
-          "Confirm VITE_API_BASE_URL points to the backend origin, not the GitHub Pages URL."
+          "Confirm VITE_API_BASE_URL points to the backend origin."
         ]
       }
     });

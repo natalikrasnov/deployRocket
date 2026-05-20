@@ -12,8 +12,8 @@ This is not a chat app. The chat-like composer is only used to create or edit st
 - Uses a Codex coding model through the OpenAI Responses API to generate real project files.
 - Creates or updates a GitHub repository in the connected customer GitHub account through OAuth.
 - Commits generated files to GitHub.
-- Configures GitHub Pages with a GitHub Actions deployment workflow.
-- Polls real GitHub Actions and Pages state until the project is live or failed.
+- Deploys generated Vite projects to Vercel through the Vercel REST API.
+- Polls real Vercel deployment state until the project is live or failed.
 - Stores project status, prompts, architecture, actions, errors, and deployment history in each project repo on the `deployrocket-state` branch.
 
 There is no mock mode and no fake status path. Missing credentials, invalid tokens, Codex failures, GitHub errors, and deployment failures are written as readable project errors in the GitHub dossier.
@@ -28,7 +28,7 @@ There is no mock mode and no fake status path. Missing credentials, invalid toke
 - GitHub-owned project state with `deployrocket-state` README dossiers
 - GitHub OAuth with per-session customer authorization
 - OpenAI Responses API with a Codex coding model
-- GitHub REST API and GitHub Pages Actions deployment
+- GitHub REST API and Vercel deployments
 
 ## Requirements
 
@@ -37,6 +37,7 @@ There is no mock mode and no fake status path. Missing credentials, invalid toke
 - OpenAI API key with access to the configured model
 - GitHub account
 - GitHub OAuth App
+- Vercel access token
 
 ## Installation
 
@@ -49,7 +50,7 @@ Fill in `.env` before creating projects. `.env` and `.env.prod` are ignored by g
 
 ## Environment Variables
 
-Local development uses `.env`. Production/serverless values can be staged in `.env.prod` and copied into Vercel or your host environment settings. Do not put private server secrets in GitHub Pages workflow variables.
+Local development uses `.env`. Production/serverless values can be staged in `.env.prod` and copied into Vercel or your host environment settings. Do not commit private server secrets.
 
 ```bash
 PORT=3000
@@ -68,33 +69,34 @@ SESSION_SECRET=
 
 GITHUB_DEFAULT_BRANCH=main
 
+# Vercel account that owns generated deployments.
+VERCEL_TOKEN=
+# Optional team target for generated Vercel deployments.
+VERCEL_TEAM_ID=
+VERCEL_TEAM_SLUG=
+VERCEL_TARGET=production
+
 # Serverless mode exports the API as a function and stores project state in GitHub.
 SERVERLESS=false
 GITHUB_PROJECT_TOPIC=deployrocket-project
 GITHUB_STATE_BRANCH=deployrocket-state
 
 # Comma-separated frontend origins allowed to call the API.
-# Origins do not include paths. For GitHub Pages use: https://YOUR_USERNAME.github.io
+# Origins do not include paths.
 FRONTEND_ORIGIN=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
 
 # Public frontend app URL used after GitHub OAuth redirects.
-# For GitHub Pages include the repository path, for example:
-# https://YOUR_USERNAME.github.io/deployRocket/
+# For production Vercel, use: https://YOUR_APP.vercel.app/
 FRONTEND_URL=http://localhost:5173
 
-# Public backend URL used by the static GitHub Pages frontend.
+# Public backend URL used by a separately hosted static frontend.
 # Leave empty for local same-origin/dev-proxy usage.
 # Example: https://api.your-domain.com
 VITE_API_BASE_URL=
 ```
 
-For the GitHub Pages static frontend workflow, set public repository Actions variables only:
+For same-origin Vercel hosting, keep `VITE_API_BASE_URL` empty so frontend requests use `/api` and `/auth` on the same deployment.
 
-```bash
-VITE_API_BASE_URL=https://your-api.example.com
-GITHUB_PROJECT_TOPIC=deployrocket-project
-GITHUB_STATE_BRANCH=deployrocket-state
-```
 
 ## GitHub OAuth Setup
 
@@ -105,15 +107,14 @@ GITHUB_STATE_BRANCH=deployrocket-state
 5. Copy the client ID and client secret into `.env`.
 6. Set `SESSION_SECRET` to a long random value.
 
-The OAuth app credentials are infrastructure configuration for the deployRocket installation. They are not your personal deployment target, and they should never be committed. When a customer clicks Connect GitHub, GitHub issues an access token for that customer session; repositories, commits, Actions, and Pages deployments are created in that connected customer account.
+The OAuth app credentials are infrastructure configuration for the deployRocket installation. They are not your personal deployment target, and they should never be committed. When a customer clicks Connect GitHub, GitHub issues an access token for that customer session; repositories and commits are created in that connected customer account. Deployments are created in the Vercel account represented by `VERCEL_TOKEN`.
 
 The app requests these OAuth scopes:
 
 - `repo`
-- `workflow`
 - `user:email`
 
-The repository is created in the connected customer account. It is public by default so GitHub Pages can deploy without requiring a paid private Pages setup.
+The repository is created in the connected customer account. It is public by default so the generated project can be inspected and reused easily.
 
 ## Serverless Deployment
 
@@ -131,19 +132,24 @@ GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=https://your-vercel-app.vercel.app/auth/github/callback
 SESSION_SECRET=your-long-random-secret
+VERCEL_TOKEN=
+# Optional for Vercel teams:
+VERCEL_TEAM_ID=
+VERCEL_TEAM_SLUG=
+VERCEL_TARGET=production
 FRONTEND_ORIGIN=https://your-vercel-app.vercel.app
 FRONTEND_URL=https://your-vercel-app.vercel.app/
 ```
 
-For same-origin Vercel hosting, leave `VITE_API_BASE_URL` empty. If you keep the frontend on GitHub Pages and use Vercel only for the API, set `VITE_API_BASE_URL=https://your-vercel-app.vercel.app`, set `FRONTEND_ORIGIN=https://your-github-username.github.io`, and set `FRONTEND_URL=https://your-github-username.github.io/deployRocket/`.
+For same-origin Vercel hosting, leave `VITE_API_BASE_URL` empty.
 
-Update the GitHub OAuth App callback URL to the same `GITHUB_CALLBACK_URL` value. Serverless orchestration advances through the polling endpoint `POST /api/projects/:id/run`, so Codex generation, GitHub commits, and Pages deployment status continue without relying on a long-lived Express process.
+Update the GitHub OAuth App callback URL to the same `GITHUB_CALLBACK_URL` value. Serverless orchestration advances through the polling endpoint `POST /api/projects/:id/run`, so Codex generation, GitHub commits, and Vercel deployment status continue without relying on a long-lived Express process.
 
 The dashboard rebuilds itself by searching the connected user's GitHub account for repositories with the `deployrocket-project` topic, then reading the dossier README from `deployrocket-state`. Generated project code remains on `main`; deployRocket status updates stay off the deployment branch.
 
 ## Deploying A Separate Backend
 
-GitHub Pages only hosts the static React frontend. It cannot run the Express API, OAuth callback, OpenAI calls, or GitHub orchestration. If you do not use the Vercel serverless setup, run the backend on Render, Railway, Fly.io, a VPS, or another Node-capable host.
+If you do not use the Vercel serverless setup for deployRocket itself, run the backend on Render, Railway, Fly.io, a VPS, or another Node-capable host.
 
 Set the hosted backend origin in the frontend build as:
 
@@ -155,32 +161,27 @@ Also update the GitHub OAuth App callback URL and backend .env to match the host
 
 ```bash
 GITHUB_CALLBACK_URL=https://your-backend.example.com/auth/github/callback
-FRONTEND_ORIGIN=https://your-github-username.github.io
-FRONTEND_URL=https://your-github-username.github.io/deployRocket/
+FRONTEND_ORIGIN=https://your-frontend.example.com
+FRONTEND_URL=https://your-frontend.example.com/
 ```
 
-`FRONTEND_ORIGIN` is only the origin, without `/deployRocket`. `FRONTEND_URL` is the full app URL used after GitHub login. In production the backend should run on HTTPS so browser session cookies work across the GitHub Pages frontend and the API server.
-
-If the static frontend is deployed by the included GitHub Actions workflow, set a repository Actions variable named `VITE_API_BASE_URL` to your hosted backend URL, then rerun the Pages workflow. The workflow also accepts an Actions secret with the same name, but this value is public in the built JavaScript bundle, so an Actions variable is preferred.
-
-If the production GitHub Pages app shows no GitHub sign-in, check `VITE_API_BASE_URL` first. A blank value means the static page is trying to call GitHub Pages itself for `/api/setup`, but GitHub Pages cannot host the API or OAuth callback.
+`FRONTEND_ORIGIN` is only the origin. `FRONTEND_URL` is the full app URL used after GitHub login. In production the backend should run on HTTPS so browser session cookies work across the frontend and the API server.
 
 Local development can leave `VITE_API_BASE_URL` empty because Vite proxies `/api` and `/auth` to `localhost:3000`.
 
-## GitHub Pages Setup
+## Generated Project Deployment
 
-No manual Pages setup is normally required after OAuth is connected.
+Generated projects deploy to Vercel. Set `VERCEL_TOKEN` for the Vercel account that should own those deployments. If the deployments should go into a Vercel team, set `VERCEL_TEAM_ID` or `VERCEL_TEAM_SLUG`.
 
 For each generated project, the backend:
 
 1. Creates or reuses the project repository.
 2. Commits generated Vite React TypeScript files.
-3. Commits `.github/workflows/pages.yml`.
-4. Enables Pages with workflow deployment.
-5. Dispatches or waits for the Pages workflow.
-6. Polls the workflow and retrieves the Pages URL.
+3. Creates a Vercel deployment from the generated file set.
+4. Polls Vercel until the deployment is ready or failed.
+5. Stores the live Vercel URL in the project dossier.
 
-If deployment fails, open the project detail screen and inspect the error panel and action history. The workflow URL is stored in deployment history.
+If deployment fails, open the project detail screen and inspect the error panel and action history. The Vercel deployment URL or inspector URL is stored in deployment history when Vercel returns one.
 
 ## Running Locally
 
@@ -288,7 +289,7 @@ Core backend agents:
 - `promptArchitect.ts`
 - `codexRunner.ts`
 - `githubManager.ts`
-- `pagesDeployManager.ts`
+- `vercelDeployManager.ts`
 - `orchestrator.ts`
 
 ## Failure Behavior
@@ -302,7 +303,8 @@ Common setup failures:
 - GitHub not connected
 - Invalid or expired GitHub token
 - Missing repository permissions
-- GitHub Pages workflow failures
+- Missing Vercel token
+- Vercel deployment failures
 - Codex malformed response
 - Empty prompts
 - Invalid uploads

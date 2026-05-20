@@ -105,6 +105,10 @@ function isRunning(project?: Project | null) {
   return Boolean(project && runningStatuses.includes(project.status));
 }
 
+function projectLiveUrl(project: Project) {
+  return project.deploymentUrl ?? project.vercelDeploymentUrl ?? project.githubPagesUrl;
+}
+
 function formatTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
@@ -275,7 +279,7 @@ export default function App() {
   };
 
   return (
-    <main className="flex flex-col md:flex-row h-screen w-screen overflow-hidden bg-[#05080f] text-zinc-100 relative">
+    <main className="relative flex h-dvh w-full min-w-0 flex-col overflow-hidden bg-[#05080f] text-zinc-100 md:flex-row">
       <div className="absolute inset-0 z-0 bg-[linear-gradient(155deg,rgba(5,8,15,0.99)_0%,rgba(10,11,24,0.98)_45%,rgba(15,23,42,0.96)_100%)]" />
       
       <Sidebar view={view} setView={setView} />
@@ -287,8 +291,8 @@ export default function App() {
           onNew={() => setView({ name: "new" })}
         />
 
-        <div className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:pb-8 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-5xl flex flex-col min-h-full">
+        <div className="flex-1 overflow-y-auto px-3 py-3 pb-24 sm:px-6 sm:py-4 md:pb-8 lg:px-8">
+          <div className="mx-auto flex min-h-full w-full max-w-5xl min-w-0 flex-col">
             {notice ? <Notice message={notice} onClose={() => setNotice(null)} /> : null}
             {setup ? (
               <SetupBanner
@@ -302,7 +306,7 @@ export default function App() {
               <ApiConnectionBanner message={setupError} />
             ) : null}
 
-            <section className="flex-1 pb-8 pt-4">
+            <section className="min-w-0 flex-1 pb-8 pt-3 sm:pt-4">
               {loading ? (
                 <LoadingScreen />
               ) : view.name === "dashboard" ? (
@@ -360,9 +364,7 @@ function Sidebar({ view, setView }: { view: View; setView: (v: View) => void }) 
   return (
     <aside className="hidden md:flex relative z-20 w-64 shrink-0 flex-col border-r border-white/5 bg-white/[0.01] backdrop-blur-xl p-4">
       <div className="flex items-center gap-3 mb-8 px-2">
-         <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-glow-cyan">
-           <Rocket size={18} />
-         </div>
+         <LogoMark />
          <span className="text-lg font-bold tracking-wide text-white">deployRocket</span>
       </div>
 
@@ -429,7 +431,16 @@ function BottomNav({ view, setView }: { view: View; setView: (v: View) => void }
   );
 }
 
-
+function LogoMark({ className = "h-8 w-8", iconSize = 18 }: { className?: string; iconSize?: number }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={`flex shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-glow-cyan ${className}`}
+    >
+      <Rocket size={iconSize} />
+    </div>
+  );
+}
 
 function AppHeader({
   view,
@@ -442,7 +453,7 @@ function AppHeader({
 }) {
   const showBack = view.name !== "dashboard";
   return (
-    <header className="sticky top-0 z-20 border-b border-white/5 bg-[#05080f]/50 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8 shrink-0">
+    <header className="sticky top-0 z-20 shrink-0 border-b border-white/5 bg-[#05080f]/50 px-3 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {showBack ? (
@@ -450,13 +461,14 @@ function AppHeader({
               <ArrowLeft size={19} />
             </IconButton>
           ) : (
-            <div className="min-w-0">
-              <h1 className="truncate text-xl font-semibold text-white">Dashboard</h1>
+            <div className="flex min-w-0 items-center gap-3">
+              <LogoMark className="h-8 w-8 md:hidden" />
+              <h1 className="truncate text-lg font-semibold text-white sm:text-xl">Dashboard</h1>
             </div>
           )}
         </div>
         <button
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300"
+          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300"
           onClick={onNew}
           type="button"
         >
@@ -475,16 +487,16 @@ function SetupBanner({
   setup: SetupStatus;
   onDisconnect: () => Promise<void>;
 }) {
-  if (setup.openaiConfigured && setup.githubOAuthConfigured && setup.githubConnected) {
+  if (setup.openaiConfigured && setup.githubOAuthConfigured && setup.vercelConfigured && setup.githubConnected) {
     return (
-      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
-        <span className="truncate">
+      <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100 sm:mt-4">
+        <span className="min-w-0 truncate">
           GitHub connected{setup.githubUser ? ` as ${setup.githubUser.login}` : ""}
         </span>
         <button
           type="button"
           onClick={onDisconnect}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-300/25 px-2 text-xs text-emerald-100"
+          className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-emerald-300/25 px-2 text-xs text-emerald-100"
         >
           <Unplug size={14} />
           Disconnect
@@ -527,9 +539,9 @@ function ApiConnectionBanner({ message }: { message: string }) {
           <p className="mt-1 text-amber-50/80">{message}</p>
           {missingApiBase ? (
             <p className="mt-2 text-xs leading-5 text-amber-50/70">
-              GitHub Pages is static, so it cannot run OAuth or API routes itself. Set the Actions variable
+              This static frontend is not connected to the deployRocket backend. Set
               <span className="mx-1 rounded bg-black/20 px-1.5 py-0.5 font-mono">VITE_API_BASE_URL</span>
-              to your hosted backend origin, then rerun the Pages workflow.
+              to the hosted API origin, or deploy the app as a same-origin Vercel project.
             </p>
           ) : (
             <p className="mt-2 break-all text-xs text-amber-50/70">API base: {apiBaseUrl || window.location.origin}</p>
@@ -563,40 +575,40 @@ function Dashboard({
           <Rocket size={28} />
         </div>
         <h2 className="text-2xl font-semibold text-white">Ready for launch</h2>
-        <p className="mt-2 max-w-xs text-sm text-zinc-400">Fuel a project brief and deploy it through Codex, GitHub, and Pages.</p>
+        <p className="mt-2 max-w-xs text-sm text-zinc-400">Fuel a project brief and deploy it through Codex, GitHub, and Vercel.</p>
       </div>
     );
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid min-w-0 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
       {projects.map((project) => (
         <button
           key={project.id}
-          className="rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left backdrop-blur-md transition hover:border-cyan-400/45 hover:bg-white/[0.04] hover:shadow-glow-cyan"
+          className="w-full min-w-0 overflow-hidden rounded-lg border border-white/5 bg-white/[0.02] p-4 text-left backdrop-blur-md transition hover:border-cyan-400/45 hover:bg-white/[0.04] hover:shadow-glow-cyan"
           type="button"
           onClick={() => onOpen(project)}
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
               <h2 className="truncate text-lg font-semibold text-white">{project.name}</h2>
               <p className="mt-1 line-clamp-2 text-sm text-zinc-400">{project.summary}</p>
             </div>
             <StatusPill status={project.status} />
           </div>
-          <div className="mt-4 flex items-center justify-between gap-3 text-xs text-zinc-500">
-            <span>{formatTime(project.updatedAt)}</span>
+          <div className="mt-4 flex min-w-0 items-center justify-between gap-3 text-xs text-zinc-500">
+            <span className="min-w-0 truncate">{formatTime(project.updatedAt)}</span>
             {project.error ? (
-              <span className="inline-flex items-center gap-1 text-rose-200">
+              <span className="inline-flex shrink-0 items-center gap-1 text-rose-200">
                 <AlertTriangle size={14} />
                 Error
               </span>
             ) : null}
           </div>
-          {project.githubPagesUrl ? (
-            <div className="mt-3 flex items-center gap-2 truncate text-sm text-lime-200">
-              <ExternalLink size={15} />
-              <span className="truncate">{project.githubPagesUrl}</span>
+          {projectLiveUrl(project) ? (
+            <div className="mt-3 flex w-full min-w-0 items-center gap-2 overflow-hidden text-sm text-lime-200">
+              <ExternalLink className="shrink-0" size={15} />
+              <span className="min-w-0 flex-1 truncate">{projectLiveUrl(project)}</span>
             </div>
           ) : null}
         </button>
@@ -793,6 +805,7 @@ function ProjectDetails({
 }) {
   const [continueBusy, setContinueBusy] = useState(false);
   const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
+  const liveUrl = projectLiveUrl(project);
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -875,10 +888,10 @@ function ProjectDetails({
             {project.githubRepoUrl ? (
               <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
             ) : null}
-            {project.githubPagesUrl ? (
-              <ExternalAnchor href={project.githubPagesUrl} icon={<ExternalLink size={16} />} label="Live Site" />
+            {liveUrl ? (
+              <ExternalAnchor href={liveUrl} icon={<ExternalLink size={16} />} label="Live Site" />
             ) : null}
-            {!project.githubRepoUrl && !project.githubPagesUrl ? (
+            {!project.githubRepoUrl && !liveUrl ? (
               <p className="text-sm text-zinc-500">No links generated yet.</p>
             ) : null}
           </div>

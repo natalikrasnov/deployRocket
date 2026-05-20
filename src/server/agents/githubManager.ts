@@ -1,4 +1,4 @@
-import { config, isGithubOAuthConfigured } from "../config.js";
+import { config, isGithubOAuthConfigured, isVercelConfigured } from "../config.js";
 import { AppError, setupHelp } from "../lib/errors.js";
 import { slugify, nowIso } from "../lib/id.js";
 import { getGithubAuthFromContext, requireGithubAuthFromContext } from "../state/requestContext.js";
@@ -51,27 +51,6 @@ interface GitHubContentResponse {
   type: string;
 }
 
-interface WorkflowRun {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  html_url: string;
-  head_sha: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WorkflowRunsResponse {
-  workflow_runs: WorkflowRun[];
-}
-
-interface PagesResponse {
-  html_url?: string;
-  status?: string;
-  build_type?: string;
-}
-
 interface ApiOptions {
   method?: string;
   body?: unknown;
@@ -96,7 +75,7 @@ export class GitHubManager {
     const url = new URL("https://github.com/login/oauth/authorize");
     url.searchParams.set("client_id", config.githubClientId);
     url.searchParams.set("redirect_uri", callbackUrl);
-    url.searchParams.set("scope", "repo workflow user:email");
+    url.searchParams.set("scope", "repo user:email");
     url.searchParams.set("state", state);
     return url.toString();
   }
@@ -165,11 +144,13 @@ export class GitHubManager {
     if (!config.githubClientId) missing.push("GITHUB_CLIENT_ID");
     if (!config.githubClientSecret) missing.push("GITHUB_CLIENT_SECRET");
     if (!config.githubCallbackUrl) missing.push("GITHUB_CALLBACK_URL");
+    if (!config.vercelToken) missing.push("VERCEL_TOKEN");
     if (!github) missing.push("Connect your GitHub account");
 
     return {
       openaiConfigured: Boolean(config.openaiApiKey),
       githubOAuthConfigured: isGithubOAuthConfigured(),
+      vercelConfigured: isVercelConfigured(),
       githubConnected: Boolean(github),
       githubUser: github
         ? {
@@ -405,92 +386,6 @@ export class GitHubManager {
     });
 
     return commit.sha;
-  }
-
-  async enablePages(owner: string, repo: string, sessionId: string, signal?: AbortSignal) {
-    const github = await this.ensureAuthenticated(sessionId, signal);
-    const token = github.accessToken;
-
-    const existing = await this.api<PagesResponse | null>(`/repos/${owner}/${repo}/pages`, {
-      token,
-      signal,
-      allow404: true
-    });
-
-    if (existing) {
-      try {
-        await this.api(`/repos/${owner}/${repo}/pages`, {
-          method: "PUT",
-          token,
-          body: { build_type: "workflow" },
-          signal,
-          allow409: true
-        });
-      } catch (error) {
-        if (!(error instanceof AppError && [409, 422].includes(error.statusCode))) throw error;
-      }
-      return existing;
-    }
-
-    return this.api<PagesResponse>(`/repos/${owner}/${repo}/pages`, {
-      method: "POST",
-      token,
-      body: { build_type: "workflow" },
-      signal,
-      allow409: true
-    });
-  }
-
-  async dispatchPagesWorkflow(
-    owner: string,
-    repo: string,
-    branch: string,
-    sessionId: string,
-    signal?: AbortSignal
-  ) {
-    const github = await this.ensureAuthenticated(sessionId, signal);
-    const result = await this.api<null | Record<string, never>>(
-      `/repos/${owner}/${repo}/actions/workflows/pages.yml/dispatches`,
-      {
-        method: "POST",
-        token: github.accessToken,
-        body: { ref: branch },
-        signal,
-        allow404: true
-      }
-    );
-
-    return result !== null;
-  }
-
-  async getLatestPagesRun(
-    owner: string,
-    repo: string,
-    branch: string,
-    sessionId: string,
-    signal?: AbortSignal
-  ) {
-    const github = await this.ensureAuthenticated(sessionId, signal);
-    const encodedBranch = encodeURIComponent(branch);
-    const workflowRuns = await this.api<WorkflowRunsResponse | null>(
-      `/repos/${owner}/${repo}/actions/workflows/pages.yml/runs?branch=${encodedBranch}&per_page=10`,
-      {
-        token: github.accessToken,
-        signal,
-        allow404: true
-      }
-    );
-
-    return workflowRuns?.workflow_runs?.[0] ?? null;
-  }
-
-  async getPages(owner: string, repo: string, sessionId: string, signal?: AbortSignal) {
-    const github = await this.ensureAuthenticated(sessionId, signal);
-    return this.api<PagesResponse | null>(`/repos/${owner}/${repo}/pages`, {
-      token: github.accessToken,
-      signal,
-      allow404: true
-    });
   }
 
   async getTextFile(

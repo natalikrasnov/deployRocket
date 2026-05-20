@@ -5,8 +5,8 @@ import { projectStore } from "../state/projectStore.js";
 import { codexRunner } from "./codexRunner.js";
 import { githubManager } from "./githubManager.js";
 import { inputProcessor } from "./inputProcessor.js";
-import { pagesDeployManager } from "./pagesDeployManager.js";
 import { promptArchitect } from "./promptArchitect.js";
+import { vercelDeployManager } from "./vercelDeployManager.js";
 import type { GeneratedFile, GeneratedProject, Project, ProjectError, StructuredRequirements } from "../../shared/types.js";
 
 interface ActiveRun {
@@ -50,6 +50,7 @@ export class Orchestrator {
         current.activeInputId = inputId;
         current.activeRunKind = kind;
         current.error = null;
+        delete current.deploymentStartedAt;
         delete current.pagesDispatchRequestedAt;
       });
       await projectStore.setStatus(
@@ -123,7 +124,7 @@ export class Orchestrator {
           break;
         case "DEPLOYING": {
           const latest = await this.requireProject(projectId);
-          const result = await pagesDeployManager.pollProject(latest, githubSessionId, signal);
+          const result = await vercelDeployManager.pollProject(latest, signal);
           if (result.done) await this.clearServerlessRun(projectId);
           break;
         }
@@ -183,6 +184,7 @@ export class Orchestrator {
       current.activeRunKind = input.kind;
       current.continueContext = this.buildContinueContext(project);
       current.error = null;
+      delete current.deploymentStartedAt;
       delete current.pagesDispatchRequestedAt;
     });
     await projectStore.setStatus(
@@ -234,7 +236,7 @@ export class Orchestrator {
         code: "GITHUB_ACCOUNT_MISMATCH"
       });
     }
-    await pagesDeployManager.pollProject(project, githubSessionId, controller.signal);
+    await vercelDeployManager.pollProject(project, controller.signal);
     return projectStore.getProject(projectId);
   }
 
@@ -376,29 +378,13 @@ export class Orchestrator {
       await projectStore.setStatus(
         projectId,
         "DEPLOYING",
-        "Configuring GitHub Pages",
-        "GitHub Pages deployment started"
+        "Deploying to Vercel",
+        "Vercel deployment started"
       );
 
-      await githubManager.enablePages(repository.owner, repository.repo, githubSessionId, signal);
-      await projectStore.addAction(projectId, "GitHub Pages configured for workflow deployment", "success");
+      await vercelDeployManager.createDeployment(projectId, generated.files, signal);
 
-      const dispatched = await githubManager.dispatchPagesWorkflow(
-        repository.owner,
-        repository.repo,
-        repository.branch,
-        githubSessionId,
-        signal
-      );
-      await projectStore.addAction(
-        projectId,
-        dispatched
-          ? "Triggered GitHub Pages workflow"
-          : "Waiting for push-triggered GitHub Pages workflow",
-        "info"
-      );
-
-      await this.monitorDeployment(projectId, githubSessionId, signal);
+      await this.monitorDeployment(projectId, signal);
     } catch (error) {
       const latest = await projectStore.getProject(projectId);
       if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
@@ -563,36 +549,18 @@ export class Orchestrator {
     await projectStore.setStatus(
       projectId,
       "DEPLOYING",
-      "Configuring GitHub Pages",
-      "GitHub Pages deployment started"
+      "Deploying to Vercel",
+      "Vercel deployment started"
     );
 
-    await githubManager.enablePages(repository.owner, repository.repo, githubSessionId, signal);
-    await projectStore.addAction(projectId, "GitHub Pages configured for workflow deployment", "success");
-
-    const dispatched = await githubManager.dispatchPagesWorkflow(
-      repository.owner,
-      repository.repo,
-      repository.branch,
-      githubSessionId,
-      signal
-    );
-    await projectStore.updateProject(projectId, (current) => {
-      current.pagesDispatchRequestedAt = nowIso();
-    });
-    await projectStore.addAction(
-      projectId,
-      dispatched
-        ? "Triggered GitHub Pages workflow"
-        : "Waiting for push-triggered GitHub Pages workflow",
-      "info"
-    );
+    await vercelDeployManager.createDeployment(projectId, generated.files, signal);
   }
 
   private async clearServerlessRun(projectId: string) {
     await projectStore.updateProject(projectId, (current) => {
       delete current.activeInputId;
       delete current.activeRunKind;
+      delete current.deploymentStartedAt;
       delete current.pagesDispatchRequestedAt;
       delete current.continueContext;
     });
@@ -627,7 +595,7 @@ export class Orchestrator {
             await this.githubSaveAndDeployStep(projectId, githubSessionId, signal);
             break;
           case "DEPLOYING":
-            await this.monitorDeployment(projectId, githubSessionId, signal);
+            await this.monitorDeployment(projectId, signal);
             await this.clearServerlessRun(projectId);
             return;
           default:
@@ -695,7 +663,7 @@ export class Orchestrator {
       return "CODEX_WORKING" as const;
     }
 
-    if (project.githubLastCommitSha && project.lastCommittedPaths.length && !project.githubPagesUrl) {
+    if (project.githubLastCommitSha && project.lastCommittedPaths.length && !project.deploymentUrl) {
       return "DEPLOYING" as const;
     }
 
@@ -704,7 +672,7 @@ export class Orchestrator {
     if (!project.githubLastCommitSha || !project.lastCommittedPaths.length) {
       return "SAVING_TO_GITHUB" as const;
     }
-    if (!project.githubPagesUrl) return "DEPLOYING" as const;
+    if (!project.deploymentUrl) return "DEPLOYING" as const;
     return "DEPLOYING" as const;
   }
 
@@ -727,8 +695,8 @@ export class Orchestrator {
       "CODEX_EMPTY_RESPONSE",
       "CODEX_INVALID_FILE_ENCODING",
       "CODEX_MALFORMED_RESPONSE",
-      "GITHUB_PAGES_DEPLOYMENT_FAILED",
-      "GITHUB_PAGES_TIMEOUT"
+      "VERCEL_DEPLOYMENT_FAILED",
+      "VERCEL_TIMEOUT"
     ].includes(code);
   }
 
@@ -751,7 +719,7 @@ export class Orchestrator {
           status: project.status,
           currentStep: project.currentStep,
           repository: project.githubRepoUrl,
-          pagesUrl: project.githubPagesUrl
+          deploymentUrl: project.deploymentUrl ?? project.vercelDeploymentUrl
         },
         latestError: project.error,
         originalInput: latestInput?.text,
@@ -789,6 +757,14 @@ export class Orchestrator {
       });
     }
 
+    if (!status.vercelConfigured) {
+      throw new AppError("Vercel is not configured.", {
+        statusCode: 500,
+        code: "VERCEL_NOT_CONFIGURED",
+        setupInstructions: setupHelp.vercel
+      });
+    }
+
     if (!status.githubConnected) {
       throw new AppError("GitHub is not connected.", {
         statusCode: 401,
@@ -812,22 +788,22 @@ export class Orchestrator {
     });
   }
 
-  private async monitorDeployment(projectId: string, githubSessionId: string, signal: AbortSignal) {
+  private async monitorDeployment(projectId: string, signal: AbortSignal) {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       await this.throwIfStopped(projectId, signal);
       const project = await this.requireProject(projectId);
-      const result = await pagesDeployManager.pollProject(project, githubSessionId, signal);
+      const result = await vercelDeployManager.pollProject(project, signal);
       if (result.done) return;
       await sleep(5000, signal);
     }
 
-    throw new AppError("Timed out while waiting for GitHub Pages deployment.", {
+    throw new AppError("Timed out while waiting for Vercel deployment.", {
       statusCode: 504,
-      code: "GITHUB_PAGES_TIMEOUT",
+      code: "VERCEL_TIMEOUT",
       setupInstructions: [
-        "Open the repository Actions tab and inspect the Pages workflow.",
+        "Open the Vercel deployment inspector URL from the timeline.",
         "Use Refresh in the project screen to poll again.",
-        "If the workflow failed, use Edit to fix the project and redeploy."
+        "If the deployment failed, use Edit to fix the project and redeploy."
       ]
     });
   }

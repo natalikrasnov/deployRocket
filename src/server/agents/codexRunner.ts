@@ -75,7 +75,7 @@ export class CodexRunner {
               "Every file content must be UTF-8 encoded as base64 in contentBase64.",
               "Never place raw source code, markdown, quotes, or multiline text directly in JSON string fields.",
               "All code must be real, cohesive, and buildable.",
-              "The target deployment platform is GitHub Pages using GitHub Actions.",
+              "The target deployment platform is Vercel.",
               "The project must be a static Vite React TypeScript application.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
               "Keep the project compact enough to build quickly while satisfying the request.",
@@ -108,7 +108,7 @@ export class CodexRunner {
               "- src/styles.css or equivalent CSS imported by main.tsx.",
               "- README.md with project-specific run notes.",
               "",
-              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. GitHub Pages cannot run a server.",
+              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. deployRocket deploys the generated project to Vercel as a Vite build.",
               "Important output rule:",
               "- For each file, set contentBase64 to base64(UTF-8 file content).",
               "- Do not wrap base64 text in markdown fences.",
@@ -205,7 +205,6 @@ function createRescueGeneratedProject(
   reason: string
 ): GeneratedProject {
   const appTitle = requirements.projectName || promptPlan.title || "deployRocket Project";
-  const slug = requirements.repositoryNameSuggestion || slugFromTitle(appTitle);
   const features = requirements.coreFeatures.slice(0, 7);
   const screens = requirements.screens.slice(0, 6);
   const moods = buildMoodSeeds(requirements);
@@ -215,7 +214,7 @@ function createRescueGeneratedProject(
       "Codex did not return a structured generated_project payload, so deployRocket generated a compact static Vite React rescue build from the approved requirements.",
     setupNotes: [
       "Run npm install, then npm run dev for local development.",
-      "The app is static and deploys to GitHub Pages with the included workflow.",
+      "The app is static and deploys to Vercel through deployRocket.",
       "Use Edit Mission later to ask Codex for richer follow-up features."
     ],
     warnings: [
@@ -230,7 +229,7 @@ function createRescueGeneratedProject(
       { path: "src/main.tsx", content: rescueMainTsx() },
       { path: "src/App.tsx", content: rescueAppTsx(appTitle, requirements.summary, features, screens, moods) },
       { path: "src/styles.css", content: rescueStylesCss() },
-      { path: "README.md", content: rescueReadme(appTitle, requirements.summary, slug) }
+      { path: "README.md", content: rescueReadme(appTitle, requirements.summary) }
     ]
   };
 }
@@ -286,11 +285,7 @@ function rescueViteConfig() {
   return `import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const repository = process.env.GITHUB_REPOSITORY?.split("/")[1] ?? "";
-const base = repository && !repository.endsWith(".github.io") ? "/" + repository + "/" : "/";
-
 export default defineConfig({
-  base,
   plugins: [react()]
 });
 `;
@@ -473,7 +468,7 @@ export default function App() {
       <section className="panel">
         <div className="section-heading">
           <h2>Implemented v1 scope</h2>
-          <p>This compact build is ready for GitHub Pages and can be expanded with future deployRocket edits.</p>
+          <p>This compact build is ready for Vercel and can be expanded with future deployRocket edits.</p>
         </div>
         <div className="feature-grid">
           {project.features.map((feature) => <span key={feature}>{feature}</span>)}
@@ -602,7 +597,7 @@ h2 { margin: 0; font-size: 1.25rem; }
 `;
 }
 
-function rescueReadme(appTitle: string, summary: string, slug: string) {
+function rescueReadme(appTitle: string, summary: string) {
   return [
     "# " + appTitle,
     "",
@@ -624,9 +619,9 @@ function rescueReadme(appTitle: string, summary: string, slug: string) {
     "npm run preview",
     "```",
     "",
-    "## GitHub Pages",
+    "## Vercel",
     "",
-    "This project includes a Pages workflow and Vite base-path config for repository `" + slug + "`.",
+    "deployRocket deploys this static Vite build to Vercel.",
     ""
   ].join("\n");
 }
@@ -738,11 +733,7 @@ function ensureDeploymentFiles(files: Map<string, string>) {
       `import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const repository = process.env.GITHUB_REPOSITORY?.split("/")[1] ?? "";
-const base = repository && !repository.endsWith(".github.io") ? \`/\${repository}/\` : "/";
-
 export default defineConfig({
-  base,
   plugins: [react()]
 });
 `
@@ -779,59 +770,8 @@ export default defineConfig({
     );
   }
 
-  files.set(
-    ".github/workflows/pages.yml",
-    `name: Deploy to GitHub Pages
-
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install dependencies
-        run: npm install
-      - name: Build
-        run: npm run build
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    environment:
-      name: github-pages
-      url: \${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-`
-  );
-
-  files.set(".nojekyll", "");
+  files.delete(".github/workflows/pages.yml");
+  files.delete(".nojekyll");
 }
 
 export const codexRunner = new CodexRunner();

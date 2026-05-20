@@ -56,7 +56,7 @@ export class PromptArchitect {
             content: [
               "You are Agent 2, the Prompt Architect.",
               "Turn product requirements into a high-quality Codex implementation prompt.",
-              "The downstream project must be deployable to GitHub Pages as a static Vite React TypeScript application.",
+              "The downstream project must be deployable to Vercel as a static Vite React TypeScript application.",
               "Do not request secrets or server-side services in generated code."
             ].join("\n")
           },

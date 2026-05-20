@@ -8,7 +8,7 @@ import path from "node:path";
 import { config, paths } from "./config.js";
 import { githubManager } from "./agents/githubManager.js";
 import { orchestrator } from "./agents/orchestrator.js";
-import { pagesDeployManager } from "./agents/pagesDeployManager.js";
+import { vercelDeployManager } from "./agents/vercelDeployManager.js";
 import { AppError, toReadableError } from "./lib/errors.js";
 import { createId, nowIso } from "./lib/id.js";
 import { projectStore, runningProjectStatuses } from "./state/projectStore.js";
@@ -59,6 +59,7 @@ app.use(
 app.use((req, res, next) => {
   ensureBrowserSession(req, res);
   const github = readEncryptedJsonCookie<GitHubAuthState>(req, GITHUB_AUTH_COOKIE);
+  setRequestGithubAuth(req, github);
   requestContext.run({ github }, () => next());
 });
 
@@ -67,9 +68,21 @@ app.get("/api/health", (_req, res) => {
 });
 
 function getCallbackUrl(req: Request) {
-  const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-  const host = req.headers["x-forwarded-host"] || req.get("host");
-  return `${protocol}://${host}${config.githubCallbackUrl}`;
+  if (/^https?:\/\//i.test(config.githubCallbackUrl)) {
+    return config.githubCallbackUrl;
+  }
+
+  const protocol = firstHeaderValue(req.headers["x-forwarded-proto"]) || req.protocol;
+  const host = firstHeaderValue(req.headers["x-forwarded-host"]) || req.get("host");
+  const callbackPath = config.githubCallbackUrl.startsWith("/")
+    ? config.githubCallbackUrl
+    : `/${config.githubCallbackUrl}`;
+  return `${protocol}://${host}${callbackPath}`;
+}
+
+function firstHeaderValue(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw?.split(",")[0]?.trim();
 }
 
 app.get("/api/setup", async (req, res, next) => {
@@ -155,7 +168,7 @@ app.get("/api/projects", async (_req, res, next) => {
   }
 });
 
-app.post("/api/projects", upload.array("images", 4), async (req, res, next) => {
+app.post("/api/projects", upload.array("images", 4), restoreRequestContext, async (req, res, next) => {
   try {
     const input = buildInputRecord("create", req);
     const project = await projectStore.createProject(input);
@@ -179,7 +192,7 @@ app.get("/api/projects/:id", async (req, res, next) => {
   }
 });
 
-app.post("/api/projects/:id/edit", upload.array("images", 4), async (req, res, next) => {
+app.post("/api/projects/:id/edit", upload.array("images", 4), restoreRequestContext, async (req, res, next) => {
   try {
     const project = await projectStore.getProject(projectIdFrom(req));
     if (!project) throw notFound();
@@ -306,19 +319,33 @@ function ensureBrowserSession(req: Request, res: Response) {
   return nextSessionId;
 }
 
+function setRequestGithubAuth(req: Request, github: GitHubAuthState | null) {
+  (req as Request & { deployRocketGithubAuth?: GitHubAuthState | null }).deployRocketGithubAuth = github;
+}
+
+function githubAuthFromRequest(req: Request) {
+  return (req as Request & { deployRocketGithubAuth?: GitHubAuthState | null }).deployRocketGithubAuth ?? null;
+}
+
+function restoreRequestContext(req: Request, _res: Response, next: NextFunction) {
+  requestContext.run({ github: githubAuthFromRequest(req) }, () => next());
+}
+
 function readSignedCookie(req: Request, name: string) {
-  const raw = readCookie(req, name);
-  if (!raw) return null;
+  const values = readCookies(req, name);
 
-  const signed = decodeURIComponent(raw);
-  const separator = signed.lastIndexOf(".");
-  if (separator <= 0) return null;
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const signed = decodeURIComponent(values[index]);
+    const separator = signed.lastIndexOf(".");
+    if (separator <= 0) continue;
 
-  const value = signed.slice(0, separator);
-  const signature = signed.slice(separator + 1);
-  const expected = signCookieValue(value);
-  if (!timingSafeEqual(signature, expected)) return null;
-  return value;
+    const value = signed.slice(0, separator);
+    const signature = signed.slice(separator + 1);
+    const expected = signCookieValue(value);
+    if (timingSafeEqual(signature, expected)) return value;
+  }
+
+  return null;
 }
 
 function setSignedCookie(res: Response, name: string, value: string, maxAgeSeconds: number) {
@@ -338,13 +365,17 @@ function setEncryptedJsonCookie<T>(res: Response, name: string, value: T, maxAge
 }
 
 function readEncryptedJsonCookie<T>(req: Request, name: string) {
-  const raw = readCookie(req, name);
-  if (!raw) return null;
-  try {
-    return openJson<T>(decodeURIComponent(raw));
-  } catch {
-    return null;
+  const values = readCookies(req, name);
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    try {
+      const opened = openJson<T>(decodeURIComponent(values[index]));
+      if (opened) return opened;
+    } catch {
+      // Try the next matching cookie. Browsers can send duplicate cookie names
+      // when old Path/Domain variants exist, and only one may decrypt cleanly.
+    }
   }
+  return null;
 }
 
 function appendCookie(res: Response, value: string) {
@@ -358,11 +389,16 @@ function cookieAttributes(maxAgeSeconds: number) {
 }
 
 function readCookie(req: Request, name: string) {
+  return readCookies(req, name)[0] ?? null;
+}
+
+function readCookies(req: Request, name: string) {
   const cookieHeader = req.headers.cookie;
-  if (!cookieHeader) return null;
+  if (!cookieHeader) return [];
   const cookies = cookieHeader.split(";").map((part) => part.trim());
-  const match = cookies.find((cookie) => cookie.startsWith(name + "="));
-  return match ? match.slice(name.length + 1) : null;
+  return cookies
+    .filter((cookie) => cookie.startsWith(name + "="))
+    .map((cookie) => cookie.slice(name.length + 1));
 }
 
 function signCookieValue(value: string) {
@@ -476,7 +512,7 @@ function startStatusPoller() {
           if (!project.githubUserLogin) continue;
           const githubSessionId = await githubManager.findSessionIdForUser(project.githubUserLogin);
           if (!githubSessionId) continue;
-          await pagesDeployManager.pollProject(project, githubSessionId);
+          await vercelDeployManager.pollProject(project);
         } catch (error) {
           const readable = toReadableError(error);
           const projectError: ProjectError = {
