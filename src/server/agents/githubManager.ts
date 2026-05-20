@@ -84,7 +84,7 @@ interface ApiOptions {
 const apiBase = "https://api.github.com";
 
 export class GitHubManager {
-  getAuthorizationUrl(state: string) {
+  getAuthorizationUrl(state: string, callbackUrl: string) {
     if (!isGithubOAuthConfigured()) {
       throw new AppError("GitHub OAuth is not configured.", {
         statusCode: 500,
@@ -95,13 +95,13 @@ export class GitHubManager {
 
     const url = new URL("https://github.com/login/oauth/authorize");
     url.searchParams.set("client_id", config.githubClientId);
-    url.searchParams.set("redirect_uri", config.githubCallbackUrl);
+    url.searchParams.set("redirect_uri", callbackUrl);
     url.searchParams.set("scope", "repo workflow user:email");
     url.searchParams.set("state", state);
     return url.toString();
   }
 
-  async exchangeCode(_sessionId: string, code: string, signal?: AbortSignal) {
+  async exchangeCode(_sessionId: string, code: string, callbackUrl: string, signal?: AbortSignal) {
     if (!isGithubOAuthConfigured()) {
       throw new AppError("GitHub OAuth is not configured.", {
         statusCode: 500,
@@ -120,7 +120,7 @@ export class GitHubManager {
         client_id: config.githubClientId,
         client_secret: config.githubClientSecret,
         code,
-        redirect_uri: config.githubCallbackUrl
+        redirect_uri: callbackUrl
       }),
       signal
     });
@@ -158,7 +158,7 @@ export class GitHubManager {
     return auth;
   }
 
-  async getSetupStatus(_sessionId: string): Promise<SetupStatus> {
+  async getSetupStatus(_sessionId: string, callbackUrl?: string): Promise<SetupStatus> {
     const github = getGithubAuthFromContext();
     const missing: string[] = [];
     if (!config.openaiApiKey) missing.push("OPENAI_API_KEY");
@@ -178,7 +178,7 @@ export class GitHubManager {
             avatarUrl: github.user.avatarUrl
           }
         : undefined,
-      callbackUrl: config.githubCallbackUrl,
+      callbackUrl: callbackUrl ?? config.githubCallbackUrl,
       defaultBranch: config.githubDefaultBranch,
       missing: [...new Set(missing)]
     };

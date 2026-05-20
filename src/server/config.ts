@@ -30,7 +30,7 @@ export const config = {
   githubClientId: process.env.GITHUB_CLIENT_ID?.trim() ?? "",
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET?.trim() ?? "",
   githubCallbackUrl:
-    process.env.GITHUB_CALLBACK_URL?.trim() || "http://localhost:3000/auth/github/callback",
+    process.env.GITHUB_CALLBACK_URL?.trim() || "/auth/github/callback",
   sessionSecret: process.env.SESSION_SECRET?.trim() || "replace-this-session-secret",
   githubDefaultBranch: process.env.GITHUB_DEFAULT_BRANCH ?? "main",
   isServerless: isServerlessRuntime,

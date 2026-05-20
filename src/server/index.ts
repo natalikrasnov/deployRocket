@@ -66,9 +66,15 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, at: nowIso() });
 });
 
+function getCallbackUrl(req: Request) {
+  const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+  const host = req.headers["x-forwarded-host"] || req.get("host");
+  return `${protocol}://${host}${config.githubCallbackUrl}`;
+}
+
 app.get("/api/setup", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -76,7 +82,7 @@ app.get("/api/setup", async (req, res, next) => {
 
 app.get("/api/auth/github", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -87,7 +93,7 @@ app.post("/api/auth/github/disconnect", async (req, res, next) => {
     await githubManager.disconnect(githubSessionIdFrom(req));
     clearCookie(res, GITHUB_AUTH_COOKIE);
     setGithubAuthInContext(null);
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req)));
+    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -98,7 +104,7 @@ app.get("/auth/github", (req, res, next) => {
     const state = createId("github_state");
     (req.session as typeof req.session & { githubOauthState?: string }).githubOauthState = state;
     setSignedCookie(res, GITHUB_STATE_COOKIE, state, 10 * 60);
-    res.redirect(githubManager.getAuthorizationUrl(state));
+    res.redirect(githubManager.getAuthorizationUrl(state, getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -126,7 +132,7 @@ app.get("/auth/github/callback", async (req, res, next) => {
       });
     }
 
-    const auth = await githubManager.exchangeCode(githubSessionIdFrom(req), code);
+    const auth = await githubManager.exchangeCode(githubSessionIdFrom(req), code, getCallbackUrl(req));
     delete (req.session as typeof req.session & { githubOauthState?: string }).githubOauthState;
     clearCookie(res, GITHUB_STATE_COOKIE);
     setEncryptedJsonCookie(res, GITHUB_AUTH_COOKIE, auth, 60 * 60 * 24 * 30);
