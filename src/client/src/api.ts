@@ -46,12 +46,12 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(0, {
       error: {
         message:
-          "This static frontend is not connected to the deployRocket API. Set VITE_API_BASE_URL to your hosted backend URL or deploy same-origin on Vercel.",
+          "This static frontend is not connected to the deployRocket API. Set VITE_API_BASE_URL to your hosted backend URL or deploy the frontend and API on the same origin.",
         code: "API_BASE_URL_MISSING",
         setupInstructions: [
-          "Deploy the Express/Vercel API first.",
-          "Set VITE_API_BASE_URL to that API origin, for example https://your-app.vercel.app.",
-          "For a same-origin Vercel deployment, leave VITE_API_BASE_URL empty."
+          "Deploy the Express API first.",
+          "Set VITE_API_BASE_URL to that API origin, for example https://api.example.com.",
+          "For a same-origin setup, leave VITE_API_BASE_URL empty."
         ]
       }
     });

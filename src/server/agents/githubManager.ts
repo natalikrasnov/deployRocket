@@ -1,9 +1,9 @@
-import { config, isGithubOAuthConfigured, isVercelConfigured } from "../config.js";
+import { config, isGithubOAuthConfigured } from "../config.js";
 import { AppError, setupHelp } from "../lib/errors.js";
 import { slugify, nowIso } from "../lib/id.js";
-import { getGithubAuthFromContext, requireGithubAuthFromContext } from "../state/requestContext.js";
+import { requireGithubAuthFromContext } from "../state/requestContext.js";
 import type { GitHubAuthState } from "../state/authStore.js";
-import type { GeneratedFile, Project, SetupStatus } from "../../shared/types.js";
+import type { GeneratedFile, Project } from "../../shared/types.js";
 
 interface GitHubUserResponse {
   id: number;
@@ -135,34 +135,6 @@ export class GitHubManager {
     };
 
     return auth;
-  }
-
-  async getSetupStatus(_sessionId: string, callbackUrl?: string): Promise<SetupStatus> {
-    const github = getGithubAuthFromContext();
-    const missing: string[] = [];
-    if (!config.openaiApiKey) missing.push("OPENAI_API_KEY");
-    if (!config.githubClientId) missing.push("GITHUB_CLIENT_ID");
-    if (!config.githubClientSecret) missing.push("GITHUB_CLIENT_SECRET");
-    if (!config.githubCallbackUrl) missing.push("GITHUB_CALLBACK_URL");
-    if (!config.vercelToken) missing.push("VERCEL_TOKEN");
-    if (!github) missing.push("Connect your GitHub account");
-
-    return {
-      openaiConfigured: Boolean(config.openaiApiKey),
-      githubOAuthConfigured: isGithubOAuthConfigured(),
-      vercelConfigured: isVercelConfigured(),
-      githubConnected: Boolean(github),
-      githubUser: github
-        ? {
-            login: github.user.login,
-            htmlUrl: github.user.htmlUrl,
-            avatarUrl: github.user.avatarUrl
-          }
-        : undefined,
-      callbackUrl: callbackUrl ?? config.githubCallbackUrl,
-      defaultBranch: config.githubDefaultBranch,
-      missing: [...new Set(missing)]
-    };
   }
 
   async disconnect(_sessionId: string) {

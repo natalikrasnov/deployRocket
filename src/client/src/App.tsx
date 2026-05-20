@@ -61,8 +61,7 @@ const runningStatuses: ProjectStatus[] = [
   "GENERATING_PROMPT",
   "SENDING_TO_CODEX",
   "CODEX_WORKING",
-  "SAVING_TO_GITHUB",
-  "DEPLOYING"
+  "SAVING_TO_GITHUB"
 ];
 
 const statusTone: Record<ProjectStatus, string> = {
@@ -72,7 +71,6 @@ const statusTone: Record<ProjectStatus, string> = {
   SENDING_TO_CODEX: "border-cyan-400/45 bg-cyan-400/10 text-cyan-100",
   CODEX_WORKING: "border-teal-400/45 bg-teal-400/10 text-teal-100",
   SAVING_TO_GITHUB: "border-blue-500/40 bg-blue-500/10 text-blue-200",
-  DEPLOYING: "border-emerald-400/45 bg-emerald-400/10 text-emerald-100",
   LIVE: "border-emerald-400/45 bg-emerald-400/10 text-emerald-100",
   FAILED: "border-rose-500/50 bg-rose-500/10 text-rose-200",
   STOPPED: "border-zinc-500/50 bg-zinc-500/10 text-zinc-200"
@@ -103,10 +101,6 @@ const actionTone: Record<ActionLevel, { dot: string; card: string; icon: "check"
 
 function isRunning(project?: Project | null) {
   return Boolean(project && runningStatuses.includes(project.status));
-}
-
-function projectLiveUrl(project: Project) {
-  return project.deploymentUrl ?? project.vercelDeploymentUrl ?? project.githubPagesUrl;
 }
 
 function formatTime(value: string) {
@@ -487,7 +481,12 @@ function SetupBanner({
   setup: SetupStatus;
   onDisconnect: () => Promise<void>;
 }) {
-  if (setup.openaiConfigured && setup.githubOAuthConfigured && setup.vercelConfigured && setup.githubConnected) {
+  const projectEditingReady =
+    setup.features?.projectEditing.ready ??
+    (setup.openaiConfigured && setup.githubOAuthConfigured && setup.githubConnected);
+  const missing = setup.features?.projectEditing.missing ?? setup.missing;
+
+  if (projectEditingReady) {
     return (
       <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100 sm:mt-4">
         <span className="min-w-0 truncate">
@@ -511,7 +510,7 @@ function SetupBanner({
         <AlertTriangle className="mt-0.5 shrink-0 text-purple-300" size={18} />
         <div className="min-w-0 flex-1">
           <p className="font-medium">Setup required</p>
-          <p className="mt-1 text-purple-100/80">{setup.missing.join(", ")}</p>
+          <p className="mt-1 text-purple-100/80">{missing.join(", ")}</p>
           <p className="mt-2 break-all text-xs text-purple-100/70">Callback: {setup.callbackUrl}</p>
         </div>
       </div>
@@ -541,7 +540,7 @@ function ApiConnectionBanner({ message }: { message: string }) {
             <p className="mt-2 text-xs leading-5 text-amber-50/70">
               This static frontend is not connected to the deployRocket backend. Set
               <span className="mx-1 rounded bg-black/20 px-1.5 py-0.5 font-mono">VITE_API_BASE_URL</span>
-              to the hosted API origin, or deploy the app as a same-origin Vercel project.
+              to the hosted API origin, or deploy the frontend and API on the same origin.
             </p>
           ) : (
             <p className="mt-2 break-all text-xs text-amber-50/70">API base: {apiBaseUrl || window.location.origin}</p>
@@ -575,7 +574,7 @@ function Dashboard({
           <Rocket size={28} />
         </div>
         <h2 className="text-2xl font-semibold text-white">Ready for launch</h2>
-        <p className="mt-2 max-w-xs text-sm text-zinc-400">Fuel a project brief and deploy it through Codex, GitHub, and Vercel.</p>
+        <p className="mt-2 max-w-xs text-sm text-zinc-400">Fuel a project brief and save it through Codex and GitHub.</p>
       </div>
     );
   }
@@ -605,12 +604,6 @@ function Dashboard({
               </span>
             ) : null}
           </div>
-          {projectLiveUrl(project) ? (
-            <div className="mt-3 flex w-full min-w-0 items-center gap-2 overflow-hidden text-sm text-lime-200">
-              <ExternalLink className="shrink-0" size={15} />
-              <span className="min-w-0 flex-1 truncate">{projectLiveUrl(project)}</span>
-            </div>
-          ) : null}
         </button>
       ))}
     </div>
@@ -699,7 +692,7 @@ function ProjectInputScreen({
          </h2>
          <p className="mt-3 text-sm leading-relaxed text-zinc-400 max-w-md">
            {mode === "create" 
-             ? "Describe your project requirements. The AI will chart the architecture, setup the repository, and deploy the initial version."
+             ? "Describe your project requirements. The AI will chart the architecture, set up the repository, and save the initial version."
              : `Adjust the mission parameters for ${project?.name}.`}
          </p>
       </div>
@@ -805,7 +798,6 @@ function ProjectDetails({
 }) {
   const [continueBusy, setContinueBusy] = useState(false);
   const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
-  const liveUrl = projectLiveUrl(project);
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -834,7 +826,7 @@ function ProjectDetails({
 
         <div className="rounded-lg border border-white/5 bg-white/[0.02] backdrop-blur-md p-5 shadow-xl flex-1">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-white">Deployment Timeline</h3>
+            <h3 className="text-lg font-semibold text-white">Project Timeline</h3>
             <span className="text-xs text-zinc-500">
               {timelineActions.length === project.actions.length
                 ? `${project.actions.length} events`
@@ -888,10 +880,7 @@ function ProjectDetails({
             {project.githubRepoUrl ? (
               <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
             ) : null}
-            {liveUrl ? (
-              <ExternalAnchor href={liveUrl} icon={<ExternalLink size={16} />} label="Live Site" />
-            ) : null}
-            {!project.githubRepoUrl && !liveUrl ? (
+            {!project.githubRepoUrl ? (
               <p className="text-sm text-zinc-500">No links generated yet.</p>
             ) : null}
           </div>

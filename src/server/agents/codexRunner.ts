@@ -70,12 +70,11 @@ export class CodexRunner {
             role: "system",
             content: [
               "You are Agent 3, the Codex Runner.",
-              "Generate or modify a deployable software project.",
+              "Generate or modify a buildable software project.",
               "Return only files through the required JSON schema.",
               "Every file content must be UTF-8 encoded as base64 in contentBase64.",
               "Never place raw source code, markdown, quotes, or multiline text directly in JSON string fields.",
               "All code must be real, cohesive, and buildable.",
-              "The target deployment platform is Vercel.",
               "The project must be a static Vite React TypeScript application.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
               "Keep the project compact enough to build quickly while satisfying the request.",
@@ -108,7 +107,7 @@ export class CodexRunner {
               "- src/styles.css or equivalent CSS imported by main.tsx.",
               "- README.md with project-specific run notes.",
               "",
-              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. deployRocket deploys the generated project to Vercel as a Vite build.",
+              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. deployRocket saves the generated Vite build files to GitHub.",
               "Important output rule:",
               "- For each file, set contentBase64 to base64(UTF-8 file content).",
               "- Do not wrap base64 text in markdown fences.",
@@ -189,7 +188,7 @@ export class CodexRunner {
       byPath.set(normalizedPath, file.content);
     }
 
-    ensureDeploymentFiles(byPath);
+    ensureBuildFiles(byPath);
 
     return {
       ...generated,
@@ -214,7 +213,7 @@ function createRescueGeneratedProject(
       "Codex did not return a structured generated_project payload, so deployRocket generated a compact static Vite React rescue build from the approved requirements.",
     setupNotes: [
       "Run npm install, then npm run dev for local development.",
-      "The app is static and deploys to Vercel through deployRocket.",
+      "The app is static and can be built with npm run build.",
       "Use Edit Mission later to ask Codex for richer follow-up features."
     ],
     warnings: [
@@ -468,7 +467,7 @@ export default function App() {
       <section className="panel">
         <div className="section-heading">
           <h2>Implemented v1 scope</h2>
-          <p>This compact build is ready for Vercel and can be expanded with future deployRocket edits.</p>
+          <p>This compact build is ready to expand with future deployRocket edits.</p>
         </div>
         <div className="feature-grid">
           {project.features.map((feature) => <span key={feature}>{feature}</span>)}
@@ -619,9 +618,9 @@ function rescueReadme(appTitle: string, summary: string) {
     "npm run preview",
     "```",
     "",
-    "## Vercel",
+    "## Notes",
     "",
-    "deployRocket deploys this static Vite build to Vercel.",
+    "deployRocket saved this static Vite build to GitHub.",
     ""
   ].join("\n");
 }
@@ -667,7 +666,6 @@ function compactPromptPlan(promptPlan: CodexPromptPlan) {
     architectureInstructions: promptPlan.architectureInstructions.slice(0, 5),
     frontendInstructions: promptPlan.frontendInstructions.slice(0, 8),
     backendInstructions: promptPlan.backendInstructions.slice(0, 3),
-    deploymentInstructions: promptPlan.deploymentInstructions.slice(0, 4),
     acceptanceCriteria: promptPlan.acceptanceCriteria.slice(0, 8)
   };
 }
@@ -701,7 +699,7 @@ function decodeBase64FileContent(path: string, contentBase64: string) {
   }
 }
 
-function ensureDeploymentFiles(files: Map<string, string>) {
+function ensureBuildFiles(files: Map<string, string>) {
   if (!files.has("package.json")) {
     files.set(
       "package.json",

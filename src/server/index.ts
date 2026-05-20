@@ -8,13 +8,13 @@ import path from "node:path";
 import { config, paths } from "./config.js";
 import { githubManager } from "./agents/githubManager.js";
 import { orchestrator } from "./agents/orchestrator.js";
-import { vercelDeployManager } from "./agents/vercelDeployManager.js";
+import { getSetupStatus } from "./features/capabilities.js";
 import { AppError, toReadableError } from "./lib/errors.js";
 import { createId, nowIso } from "./lib/id.js";
-import { projectStore, runningProjectStatuses } from "./state/projectStore.js";
+import { projectStore } from "./state/projectStore.js";
 import { requestContext, setGithubAuthInContext } from "./state/requestContext.js";
 import type { GitHubAuthState } from "./state/authStore.js";
-import type { ProjectError, ProjectInputImage, ProjectInputRecord } from "../shared/types.js";
+import type { ProjectInputImage, ProjectInputRecord } from "../shared/types.js";
 
 const app = express();
 
@@ -87,7 +87,7 @@ function firstHeaderValue(value: string | string[] | undefined) {
 
 app.get("/api/setup", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
+    res.json(getSetupStatus(getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -95,7 +95,7 @@ app.get("/api/setup", async (req, res, next) => {
 
 app.get("/api/auth/github", async (req, res, next) => {
   try {
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
+    res.json(getSetupStatus(getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -106,7 +106,7 @@ app.post("/api/auth/github/disconnect", async (req, res, next) => {
     await githubManager.disconnect(githubSessionIdFrom(req));
     clearCookie(res, GITHUB_AUTH_COOKIE);
     setGithubAuthInContext(null);
-    res.json(await githubManager.getSetupStatus(githubSessionIdFrom(req), getCallbackUrl(req)));
+    res.json(getSetupStatus(getCallbackUrl(req)));
   } catch (error) {
     next(error);
   }
@@ -259,7 +259,7 @@ app.post("/api/projects/:id/refresh", async (req, res, next) => {
   try {
     const project = await projectStore.getProject(projectIdFrom(req));
     if (!project) throw notFound();
-    const refreshed = await orchestrator.refreshDeployment(project.id, githubSessionIdFrom(req));
+    const refreshed = await orchestrator.refreshProject(project.id, githubSessionIdFrom(req));
     res.json(refreshed);
   } catch (error) {
     next(error);
@@ -497,36 +497,6 @@ function frontendRedirect(query = "") {
     return `/${query}`;
   }
   return `http://localhost:5173/${query}`;
-}
-
-function startStatusPoller() {
-  setInterval(async () => {
-    const projects = await projectStore.listProjects();
-    for (const project of projects) {
-      if (
-        runningProjectStatuses.includes(project.status) &&
-        project.status === "DEPLOYING" &&
-        !orchestrator.isActive(project.id)
-      ) {
-        try {
-          if (!project.githubUserLogin) continue;
-          const githubSessionId = await githubManager.findSessionIdForUser(project.githubUserLogin);
-          if (!githubSessionId) continue;
-          await vercelDeployManager.pollProject(project);
-        } catch (error) {
-          const readable = toReadableError(error);
-          const projectError: ProjectError = {
-            message: readable.message,
-            code: readable.code,
-            details: readable.details,
-            setupInstructions: readable.setupInstructions,
-            at: nowIso()
-          };
-          await projectStore.failProject(project.id, projectError);
-        }
-      }
-    }
-  }, 15000).unref();
 }
 
 if (!config.isServerless) {

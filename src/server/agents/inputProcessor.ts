@@ -48,7 +48,7 @@ export class InputProcessor {
           "Infer a concise product name, summary, and repository name.",
           "repositoryNameSuggestion must be a clean GitHub slug based on the final product name, not raw instruction words like create/build/client/serverless.",
           "If images are present, use them as visual/product context.",
-          "Do not invent credentials, external services, or impossible deployment capabilities.",
+          "Do not invent credentials, external services, or impossible platform capabilities.",
           "",
           `User text:\n${input.text || "(no text supplied; rely on images if present)"}`
         ].join("\n")

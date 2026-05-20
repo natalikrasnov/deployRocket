@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { getSetupStatus } from "../features/capabilities.js";
 import { AppError, isAbortError, setupHelp, toReadableError } from "../lib/errors.js";
 import { createId, nowIso } from "../lib/id.js";
 import { projectStore } from "../state/projectStore.js";
@@ -6,7 +7,6 @@ import { codexRunner } from "./codexRunner.js";
 import { githubManager } from "./githubManager.js";
 import { inputProcessor } from "./inputProcessor.js";
 import { promptArchitect } from "./promptArchitect.js";
-import { vercelDeployManager } from "./vercelDeployManager.js";
 import type { GeneratedFile, GeneratedProject, Project, ProjectError, StructuredRequirements } from "../../shared/types.js";
 
 interface ActiveRun {
@@ -50,7 +50,6 @@ export class Orchestrator {
         current.activeInputId = inputId;
         current.activeRunKind = kind;
         current.error = null;
-        delete current.deploymentStartedAt;
         delete current.pagesDispatchRequestedAt;
       });
       await projectStore.setStatus(
@@ -98,7 +97,7 @@ export class Orchestrator {
     const signal = controller.signal;
 
     try {
-      await this.ensureSetup(projectId, githubSessionId, signal);
+      await this.ensureProjectEditingReady(projectId, githubSessionId, signal);
       const current = await this.requireProject(projectId);
 
       switch (current.status) {
@@ -120,14 +119,8 @@ export class Orchestrator {
           await this.codexGenerationStep(projectId, signal);
           break;
         case "SAVING_TO_GITHUB":
-          await this.githubSaveAndDeployStep(projectId, githubSessionId, signal);
+          await this.githubSaveStep(projectId, githubSessionId, signal);
           break;
-        case "DEPLOYING": {
-          const latest = await this.requireProject(projectId);
-          const result = await vercelDeployManager.pollProject(latest, signal);
-          if (result.done) await this.clearServerlessRun(projectId);
-          break;
-        }
       }
     } catch (error) {
       const latest = await projectStore.getProject(projectId);
@@ -184,7 +177,6 @@ export class Orchestrator {
       current.activeRunKind = input.kind;
       current.continueContext = this.buildContinueContext(project);
       current.error = null;
-      delete current.deploymentStartedAt;
       delete current.pagesDispatchRequestedAt;
     });
     await projectStore.setStatus(
@@ -215,7 +207,7 @@ export class Orchestrator {
     return this.requireProject(projectId);
   }
 
-  async refreshDeployment(projectId: string, githubSessionId: string) {
+  async refreshProject(projectId: string, githubSessionId: string) {
     const project = await projectStore.getProject(projectId);
     if (!project) {
       throw new AppError("Project not found.", {
@@ -224,20 +216,16 @@ export class Orchestrator {
       });
     }
 
-    if (project.status !== "DEPLOYING" && project.status !== "LIVE") {
-      return project;
-    }
-
     const controller = new AbortController();
     const github = await githubManager.ensureAuthenticated(githubSessionId, controller.signal);
     if (project.githubUserLogin && project.githubUserLogin !== github.user.login) {
-      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before refreshing deployment status.`, {
+      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before refreshing it.`, {
         statusCode: 403,
         code: "GITHUB_ACCOUNT_MISMATCH"
       });
     }
-    await vercelDeployManager.pollProject(project, controller.signal);
-    return projectStore.getProject(projectId);
+
+    return project;
   }
 
   private async run(
@@ -248,7 +236,7 @@ export class Orchestrator {
     signal: AbortSignal
   ) {
     try {
-      await this.ensureSetup(projectId, githubSessionId, signal);
+      await this.ensureProjectEditingReady(projectId, githubSessionId, signal);
 
       await projectStore.setStatus(
         projectId,
@@ -338,53 +326,15 @@ export class Orchestrator {
         "Preparing GitHub repository"
       );
 
-      const currentProject = await this.requireProject(projectId);
-      const repository = await githubManager.ensureRepository(
-        currentProject,
+      await this.saveGeneratedFilesToGithub(
+        projectId,
+        generated.files,
         requirements.repositoryNameSuggestion,
+        kind,
         githubSessionId,
         signal
       );
-      await this.throwIfStopped(projectId, signal);
-
-      await projectStore.updateProject(projectId, (current) => {
-        current.githubOwner = repository.owner;
-        current.githubRepo = repository.repo;
-        current.githubRepoUrl = repository.url;
-        current.githubDefaultBranch = repository.branch;
-      });
-
-      const commitSha = await githubManager.commitFiles({
-        owner: repository.owner,
-        repo: repository.repo,
-        branch: repository.branch,
-        files: generated.files,
-        previousPaths: currentProject.lastCommittedPaths,
-        message:
-          kind === "create"
-            ? "Create project from deployRocket"
-            : "Update project from deployRocket",
-        sessionId: githubSessionId,
-        signal
-      });
-      await this.throwIfStopped(projectId, signal);
-
-      await projectStore.updateProject(projectId, (current) => {
-        current.githubLastCommitSha = commitSha;
-        current.lastCommittedPaths = generated.files.map((file) => file.path);
-      });
-      await projectStore.addAction(projectId, "Files committed to GitHub", "success", commitSha);
-
-      await projectStore.setStatus(
-        projectId,
-        "DEPLOYING",
-        "Deploying to Vercel",
-        "Vercel deployment started"
-      );
-
-      await vercelDeployManager.createDeployment(projectId, generated.files, signal);
-
-      await this.monitorDeployment(projectId, signal);
+      await this.completeGithubSave(projectId);
     } catch (error) {
       const latest = await projectStore.getProject(projectId);
       if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
@@ -495,7 +445,7 @@ export class Orchestrator {
     );
   }
 
-  private async githubSaveAndDeployStep(
+  private async githubSaveStep(
     projectId: string,
     githubSessionId: string,
     signal: AbortSignal
@@ -509,10 +459,29 @@ export class Orchestrator {
     }
 
     const generated = await this.loadGeneratedProject(projectId);
+    await this.saveGeneratedFilesToGithub(
+      projectId,
+      generated.files,
+      input.structuredRequirements.repositoryNameSuggestion,
+      kind,
+      githubSessionId,
+      signal
+    );
+    await this.completeGithubSave(projectId);
+  }
+
+  private async saveGeneratedFilesToGithub(
+    projectId: string,
+    files: GeneratedFile[],
+    repositoryNameSuggestion: string,
+    kind: "create" | "edit",
+    githubSessionId: string,
+    signal: AbortSignal
+  ) {
     const currentProject = await this.requireProject(projectId);
     const repository = await githubManager.ensureRepository(
       currentProject,
-      input.structuredRequirements.repositoryNameSuggestion,
+      repositoryNameSuggestion,
       githubSessionId,
       signal
     );
@@ -529,7 +498,7 @@ export class Orchestrator {
       owner: repository.owner,
       repo: repository.repo,
       branch: repository.branch,
-      files: generated.files,
+      files,
       previousPaths: currentProject.lastCommittedPaths,
       message:
         kind === "create"
@@ -542,35 +511,45 @@ export class Orchestrator {
 
     await projectStore.updateProject(projectId, (current) => {
       current.githubLastCommitSha = commitSha;
-      current.lastCommittedPaths = generated.files.map((file) => file.path);
+      current.lastCommittedPaths = files.map((file) => file.path);
     });
     await projectStore.addAction(projectId, "Files committed to GitHub", "success", commitSha);
-
-    await projectStore.setStatus(
-      projectId,
-      "DEPLOYING",
-      "Deploying to Vercel",
-      "Vercel deployment started"
-    );
-
-    await vercelDeployManager.createDeployment(projectId, generated.files, signal);
   }
 
   private async clearServerlessRun(projectId: string) {
     await projectStore.updateProject(projectId, (current) => {
       delete current.activeInputId;
       delete current.activeRunKind;
-      delete current.deploymentStartedAt;
       delete current.pagesDispatchRequestedAt;
       delete current.continueContext;
     });
+  }
+
+  private async completeGithubSave(projectId: string) {
+    await projectStore.updateProject(projectId, (current) => {
+      current.status = "LIVE";
+      current.currentStep = "Saved to GitHub";
+      current.error = null;
+      delete current.activeInputId;
+      delete current.activeRunKind;
+      delete current.pagesDispatchRequestedAt;
+      delete current.continueContext;
+    });
+    const project = await this.requireProject(projectId);
+    if (!project.actions.some((action) => action.message === "Project saved to GitHub")) {
+      await projectStore.addAction(
+        projectId,
+        "Project saved to GitHub",
+        "success"
+      );
+    }
   }
 
   private async runFromCurrentStatus(projectId: string, githubSessionId: string, signal: AbortSignal) {
     try {
       while (true) {
         await this.throwIfStopped(projectId, signal);
-        await this.ensureSetup(projectId, githubSessionId, signal);
+        await this.ensureProjectEditingReady(projectId, githubSessionId, signal);
         const current = await this.requireProject(projectId);
 
         switch (current.status) {
@@ -592,12 +571,8 @@ export class Orchestrator {
             await this.codexGenerationStep(projectId, signal);
             break;
           case "SAVING_TO_GITHUB":
-            await this.githubSaveAndDeployStep(projectId, githubSessionId, signal);
+            await this.githubSaveStep(projectId, githubSessionId, signal);
             break;
-          case "DEPLOYING":
-            await this.monitorDeployment(projectId, signal);
-            await this.clearServerlessRun(projectId);
-            return;
           default:
             await this.clearServerlessRun(projectId);
             return;
@@ -663,26 +638,20 @@ export class Orchestrator {
       return "CODEX_WORKING" as const;
     }
 
-    if (project.githubLastCommitSha && project.lastCommittedPaths.length && !project.deploymentUrl) {
-      return "DEPLOYING" as const;
-    }
-
     const generated = await this.loadGeneratedProject(projectId);
     if (!generated.files.length) return "CODEX_WORKING" as const;
     if (!project.githubLastCommitSha || !project.lastCommittedPaths.length) {
       return "SAVING_TO_GITHUB" as const;
     }
-    if (!project.deploymentUrl) return "DEPLOYING" as const;
-    return "DEPLOYING" as const;
+    return "SAVING_TO_GITHUB" as const;
   }
 
-  private stepLabel(status: "PROCESSING_INPUT" | "GENERATING_PROMPT" | "CODEX_WORKING" | "SAVING_TO_GITHUB" | "DEPLOYING") {
+  private stepLabel(status: "PROCESSING_INPUT" | "GENERATING_PROMPT" | "CODEX_WORKING" | "SAVING_TO_GITHUB") {
     const labels = {
       PROCESSING_INPUT: "Continuing input processing",
       GENERATING_PROMPT: "Continuing architecture prompt",
       CODEX_WORKING: "Continuing Codex generation",
-      SAVING_TO_GITHUB: "Continuing GitHub save",
-      DEPLOYING: "Continuing deployment"
+      SAVING_TO_GITHUB: "Continuing GitHub save"
     };
     return labels[status];
   }
@@ -694,9 +663,7 @@ export class Orchestrator {
       "CODEX_API_FAILURE",
       "CODEX_EMPTY_RESPONSE",
       "CODEX_INVALID_FILE_ENCODING",
-      "CODEX_MALFORMED_RESPONSE",
-      "VERCEL_DEPLOYMENT_FAILED",
-      "VERCEL_TIMEOUT"
+      "CODEX_MALFORMED_RESPONSE"
     ].includes(code);
   }
 
@@ -718,8 +685,7 @@ export class Orchestrator {
           summary: project.summary,
           status: project.status,
           currentStep: project.currentStep,
-          repository: project.githubRepoUrl,
-          deploymentUrl: project.deploymentUrl ?? project.vercelDeploymentUrl
+          repository: project.githubRepoUrl
         },
         latestError: project.error,
         originalInput: latestInput?.text,
@@ -738,8 +704,8 @@ export class Orchestrator {
     );
   }
 
-  private async ensureSetup(projectId: string, githubSessionId: string, signal: AbortSignal) {
-    const status = await githubManager.getSetupStatus(githubSessionId);
+  private async ensureProjectEditingReady(projectId: string, githubSessionId: string, signal: AbortSignal) {
+    const status = getSetupStatus();
 
     if (!status.openaiConfigured) {
       throw new AppError("OpenAI is not configured.", {
@@ -757,14 +723,6 @@ export class Orchestrator {
       });
     }
 
-    if (!status.vercelConfigured) {
-      throw new AppError("Vercel is not configured.", {
-        statusCode: 500,
-        code: "VERCEL_NOT_CONFIGURED",
-        setupInstructions: setupHelp.vercel
-      });
-    }
-
     if (!status.githubConnected) {
       throw new AppError("GitHub is not connected.", {
         statusCode: 401,
@@ -777,7 +735,7 @@ export class Orchestrator {
     const project = await this.requireProject(projectId);
 
     if (project.githubUserLogin && project.githubUserLogin !== github.user.login) {
-      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before editing or deploying it.`, {
+      throw new AppError(`This project belongs to GitHub account ${project.githubUserLogin}. Connect that account before editing it.`, {
         statusCode: 403,
         code: "GITHUB_ACCOUNT_MISMATCH"
       });
@@ -785,26 +743,6 @@ export class Orchestrator {
 
     await projectStore.updateProject(projectId, (current) => {
       current.githubUserLogin = github.user.login;
-    });
-  }
-
-  private async monitorDeployment(projectId: string, signal: AbortSignal) {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      await this.throwIfStopped(projectId, signal);
-      const project = await this.requireProject(projectId);
-      const result = await vercelDeployManager.pollProject(project, signal);
-      if (result.done) return;
-      await sleep(5000, signal);
-    }
-
-    throw new AppError("Timed out while waiting for Vercel deployment.", {
-      statusCode: 504,
-      code: "VERCEL_TIMEOUT",
-      setupInstructions: [
-        "Open the Vercel deployment inspector URL from the timeline.",
-        "Use Refresh in the project screen to poll again.",
-        "If the deployment failed, use Edit to fix the project and redeploy."
-      ]
     });
   }
 
@@ -929,20 +867,6 @@ export class Orchestrator {
 
 function repositoryNameFor(requirements: StructuredRequirements, project: Project) {
   return requirements.repositoryNameSuggestion || requirements.projectName || project.name || project.githubRepo || "deployrocket-project";
-}
-
-function sleep(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true }
-    );
-  });
 }
 
 export const orchestrator = new Orchestrator();

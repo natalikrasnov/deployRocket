@@ -16,8 +16,7 @@ const runningStatuses: ProjectStatus[] = [
   "GENERATING_PROMPT",
   "SENDING_TO_CODEX",
   "CODEX_WORKING",
-  "SAVING_TO_GITHUB",
-  "DEPLOYING"
+  "SAVING_TO_GITHUB"
 ];
 
 const dossierPath = "README.md";
@@ -95,7 +94,6 @@ class ProjectStore {
         }
       ],
       inputs: [input],
-      deployments: [],
       lastCommittedPaths: []
     };
 
@@ -154,7 +152,6 @@ class ProjectStore {
       current.error = error;
       delete current.activeInputId;
       delete current.activeRunKind;
-      delete current.deploymentStartedAt;
       delete current.pagesDispatchRequestedAt;
       delete current.continueContext;
       this.pushAction(current, error.message, "error", "FAILED", error.details);
@@ -170,7 +167,6 @@ class ProjectStore {
       project.currentStep = "Stopped";
       delete project.activeInputId;
       delete project.activeRunKind;
-      delete project.deploymentStartedAt;
       delete project.pagesDispatchRequestedAt;
       delete project.continueContext;
       this.pushAction(project, message, "warning", "STOPPED");
@@ -225,8 +221,7 @@ class ProjectStore {
     parsed.githubOwner = owner;
     parsed.githubRepo = repo;
     parsed.githubDefaultBranch = parsed.githubDefaultBranch ?? defaultBranch ?? config.githubDefaultBranch;
-    parsed.deploymentUrl = parsed.deploymentUrl ?? parsed.vercelDeploymentUrl ?? parsed.githubPagesUrl;
-    return parsed;
+    return normalizeLegacyProject(parsed);
   }
 
   private async writeProject(project: Project, message: string) {
@@ -348,6 +343,36 @@ function renderPendingDefaultReadme(project: Project) {
   ].join("\n");
 }
 
+function normalizeLegacyProject(project: Project) {
+  if (
+    ((project.status as string) === "DE" + "PLOYING" ||
+      (project.status === "FAILED" &&
+        Boolean(project.error) &&
+        (project.githubLastCommitSha || project.lastCommittedPaths.length > 0)))
+  ) {
+    project.status = "LIVE";
+    project.currentStep = "Saved to GitHub";
+    project.error = null;
+    delete project.activeInputId;
+    delete project.activeRunKind;
+    delete project.pagesDispatchRequestedAt;
+    delete project.continueContext;
+
+    if (!project.actions.some((action) => action.message === "Project saved to GitHub")) {
+      project.actions.push({
+        id: createId("action"),
+        at: nowIso(),
+        message: "Project saved to GitHub",
+        level: "success",
+        status: "LIVE"
+      });
+      project.actions = project.actions.slice(-250);
+    }
+  }
+
+  return project;
+}
+
 function parseDossier(markdown: string): Project | null {
   const pattern = new RegExp("~~~" + stateFence + "\\n([\\s\\S]*?)\\n~~~", "m");
   const match = markdown.match(pattern);
@@ -399,8 +424,6 @@ function renderDossier(project: Project) {
     "",
     "State branch: " + config.githubStateBranch,
     "",
-    "Live URL: " + (project.deploymentUrl ?? project.vercelDeploymentUrl ?? "pending"),
-    "",
     "## Original Prompt",
     "",
     latestInput?.text || "(image-only request)",
@@ -430,8 +453,7 @@ function renderStages(project: Project) {
     ["GENERATING_PROMPT", "Created architecture plan"],
     ["CODEX_WORKING", "Generated project code"],
     ["SAVING_TO_GITHUB", "Committed files to GitHub"],
-    ["DEPLOYING", "Deployed to Vercel"],
-    ["LIVE", "Verified live URL"]
+    ["LIVE", "Saved project"]
   ];
 
   return [
@@ -451,7 +473,6 @@ function stageState(project: Project, stage: ProjectStatus | "RECEIVED") {
     "GENERATING_PROMPT",
     "CODEX_WORKING",
     "SAVING_TO_GITHUB",
-    "DEPLOYING",
     "LIVE"
   ];
   const active = normalizeStage(project.status === "FAILED" ? latestWorkingStatus(project) : project.status);

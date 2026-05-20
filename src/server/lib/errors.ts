@@ -67,10 +67,5 @@ export const setupHelp = {
     "Disconnect GitHub from this app, then connect again.",
     "Confirm the OAuth app has repo permissions.",
     "Retry after the new token is stored."
-  ],
-  vercel: [
-    "Create a Vercel access token from the Vercel account that should own generated deployments.",
-    "Add VERCEL_TOKEN to .env or the Vercel project environment variables.",
-    "If deploying into a team, also set VERCEL_TEAM_ID or VERCEL_TEAM_SLUG."
   ]
 };

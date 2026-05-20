@@ -5,7 +5,6 @@ export const PROJECT_STATUSES = [
   "SENDING_TO_CODEX",
   "CODEX_WORKING",
   "SAVING_TO_GITHUB",
-  "DEPLOYING",
   "LIVE",
   "FAILED",
   "STOPPED"
@@ -62,7 +61,6 @@ export interface CodexPromptPlan {
   architectureInstructions: string[];
   frontendInstructions: string[];
   backendInstructions: string[];
-  deploymentInstructions: string[];
   modificationInstructions: string[];
   acceptanceCriteria: string[];
   codexPrompt: string;
@@ -88,19 +86,6 @@ export interface ProjectError {
   setupInstructions?: string[];
 }
 
-export interface DeploymentRecord {
-  id: string;
-  at: string;
-  status: string;
-  conclusion?: string;
-  provider?: "vercel" | "github-pages";
-  deploymentId?: string;
-  workflowRunUrl?: string;
-  deploymentUrl?: string;
-  inspectorUrl?: string;
-  pagesUrl?: string;
-}
-
 export interface Project {
   id: string;
   name: string;
@@ -108,10 +93,6 @@ export interface Project {
   status: ProjectStatus;
   currentStep: string;
   githubRepoUrl?: string;
-  deploymentUrl?: string;
-  vercelDeploymentUrl?: string;
-  vercelDeploymentId?: string;
-  githubPagesUrl?: string;
   githubOwner?: string;
   githubRepo?: string;
   githubUserLogin?: string;
@@ -124,11 +105,9 @@ export interface Project {
   updatedAt: string;
   actions: ProjectAction[];
   inputs: ProjectInputRecord[];
-  deployments: DeploymentRecord[];
   lastCommittedPaths: string[];
   activeInputId?: string;
   activeRunKind?: "create" | "edit";
-  deploymentStartedAt?: string;
   pagesDispatchRequestedAt?: string;
   continueContext?: string;
 }
@@ -140,7 +119,6 @@ export interface JsonDatabase {
 export interface SetupStatus {
   openaiConfigured: boolean;
   githubOAuthConfigured: boolean;
-  vercelConfigured: boolean;
   githubConnected: boolean;
   githubUser?: {
     login: string;
@@ -150,6 +128,16 @@ export interface SetupStatus {
   callbackUrl: string;
   defaultBranch: string;
   missing: string[];
+  features?: {
+    githubAuth: {
+      ready: boolean;
+      missing: string[];
+    };
+    projectEditing: {
+      ready: boolean;
+      missing: string[];
+    };
+  };
 }
 
 export interface ApiListResponse<T> {
