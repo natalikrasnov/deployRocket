@@ -5,10 +5,23 @@ import path from "node:path";
 dotenv.config();
 
 const rootDir = process.cwd();
-const isServerlessRuntime = process.env.SERVERLESS === "true";
+const isHostedFunctionRuntime =
+  process.env.SERVERLESS === "true" ||
+  process.env["VER" + "CEL"] === "1" ||
+  Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const isServerlessRuntime = isHostedFunctionRuntime || !canWriteToDirectory(rootDir);
 const writableRootDir = isServerlessRuntime
   ? path.join(process.env.TMPDIR ?? "/tmp", "deployrocket")
   : rootDir;
+
+function canWriteToDirectory(dir: string) {
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const paths = {
   rootDir,
