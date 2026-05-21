@@ -53,6 +53,16 @@ export const setupHelp = {
     "Restart the backend so the new environment variable is loaded.",
     "Make sure the key has access to the configured OpenAI model."
   ],
+  openaiCustomer: [
+    "Open Settings.",
+    "Add the customer's OpenAI API key or client token.",
+    "The token is stored in an encrypted HttpOnly cookie and is never returned to the UI."
+  ],
+  openaiBilling: [
+    "Open Settings.",
+    "Connect the customer's OpenAI client token.",
+    "Activate the mock $5 billing plan until the live OpenAI API billing adapter is implemented."
+  ],
   githubOAuth: [
     "Create a GitHub OAuth App in GitHub Developer settings.",
     "Set the callback URL to the GITHUB_CALLBACK_URL value from .env.",

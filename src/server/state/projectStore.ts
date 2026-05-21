@@ -338,20 +338,17 @@ function renderPendingDefaultReadme(project: Project) {
     "",
     project.error ? "Latest error: " + project.error.message : "Latest error: none",
     "",
+    project.githubPagesUrl ? "Live site: " + project.githubPagesUrl : "Live site: pending GitHub Pages publish",
+    "",
     "Project state lives on the `" + config.githubStateBranch + "` branch in `README.md`.",
     ""
   ].join("\n");
 }
 
 function normalizeLegacyProject(project: Project) {
-  if (
-    ((project.status as string) === "DE" + "PLOYING" ||
-      (project.status === "FAILED" &&
-        Boolean(project.error) &&
-        (project.githubLastCommitSha || project.lastCommittedPaths.length > 0)))
-  ) {
+  if ((project.status as string) === "DE" + "PLOYING") {
     project.status = "LIVE";
-    project.currentStep = "Saved to GitHub";
+    project.currentStep = project.githubPagesUrl ? "Live on GitHub Pages" : "Saved to GitHub";
     project.error = null;
     delete project.activeInputId;
     delete project.activeRunKind;
@@ -420,6 +417,10 @@ function renderDossier(project: Project) {
     "",
     "Repository: " + (project.githubRepoUrl ?? "pending"),
     "",
+    "Live site: " + (project.githubPagesUrl ?? "pending GitHub Pages publish"),
+    "",
+    project.githubPagesStatus ? "GitHub Pages status: " + project.githubPagesStatus : "GitHub Pages status: pending",
+    "",
     "Code branch: " + (project.githubDefaultBranch ?? config.githubDefaultBranch),
     "",
     "State branch: " + config.githubStateBranch,
@@ -453,7 +454,7 @@ function renderStages(project: Project) {
     ["GENERATING_PROMPT", "Created architecture plan"],
     ["CODEX_WORKING", "Generated project code"],
     ["SAVING_TO_GITHUB", "Committed files to GitHub"],
-    ["LIVE", "Saved project"]
+    ["LIVE", "Published project"]
   ];
 
   return [

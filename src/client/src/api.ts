@@ -137,6 +137,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  saveOpenAIConnection: (input: { apiKey: string; clientId?: string }) =>
+    request<SetupStatus>("/api/settings/openai", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  disconnectOpenAIConnection: () =>
+    request<SetupStatus>("/api/settings/openai/disconnect", {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  activateMockBilling: () =>
+    request<SetupStatus>("/api/settings/billing/mock", {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  disconnectBilling: () =>
+    request<SetupStatus>("/api/settings/billing/disconnect", {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
   disconnectGithub: () =>
     request<SetupStatus>("/api/auth/github/disconnect", {
       method: "POST",

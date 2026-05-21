@@ -1,8 +1,8 @@
-import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
-import { AppError, setupHelp } from "../lib/errors.js";
+import { AppError } from "../lib/errors.js";
+import { getOpenAIClientForRequest } from "./openaiClient.js";
 import type {
   CodexPromptPlan,
   GeneratedFile,
@@ -34,22 +34,21 @@ const blockedPathPatterns = [
   /^\.env/
 ];
 
+const serverOnlyPathPatterns = [
+  /^api\//,
+  /^backend\//,
+  /^server\//,
+  /^src\/server\//,
+  /^functions\//,
+  /^netlify\/functions\//,
+  /^\.vercel\//,
+  /^vercel\.json$/,
+  /^server\.[cm]?[jt]sx?$/,
+  /^docker-compose\./,
+  /^Dockerfile$/
+];
+
 export class CodexRunner {
-  private client: OpenAI | null = null;
-
-  private getClient() {
-    if (!config.openaiApiKey) {
-      throw new AppError("OpenAI is not configured.", {
-        statusCode: 500,
-        code: "OPENAI_NOT_CONFIGURED",
-        setupInstructions: setupHelp.openai
-      });
-    }
-
-    this.client ??= new OpenAI({ apiKey: config.openaiApiKey });
-    return this.client;
-  }
-
   async generateProject(
     requirements: StructuredRequirements,
     promptPlan: CodexPromptPlan,
@@ -57,7 +56,7 @@ export class CodexRunner {
     signal: AbortSignal,
     continueContext?: string
   ): Promise<{ runId: string; generated: GeneratedProject }> {
-    const client = this.getClient();
+    const client = getOpenAIClientForRequest();
 
     let response: Awaited<ReturnType<typeof client.responses.parse>>;
 
@@ -76,6 +75,10 @@ export class CodexRunner {
               "Never place raw source code, markdown, quotes, or multiline text directly in JSON string fields.",
               "All code must be real, cohesive, and buildable.",
               "The project must be a static Vite React TypeScript application.",
+              "The project must be serverless and browser-only: no backend, no server runtime, no API routes, no serverless functions, no database service, and no required secrets.",
+              "The built app must run from static files on GitHub Pages, including repository subpath deployments.",
+              "Configure Vite with a GitHub Pages-safe relative asset base, such as base: \"./\".",
+              "Use localStorage, in-memory state, static JSON, or client-side mock flows for persistence and backend-like behavior.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
               "Keep the project compact enough to build quickly while satisfying the request.",
               "Prefer a complete compact v1 over a sprawling multi-file app that risks truncation.",
@@ -105,9 +108,10 @@ export class CodexRunner {
               "- src/main.tsx.",
               "- src/App.tsx and any small supporting files needed.",
               "- src/styles.css or equivalent CSS imported by main.tsx.",
+              "- vite.config.ts with a relative base so built assets work from a GitHub Pages project path.",
               "- README.md with project-specific run notes.",
               "",
-              "Do not generate backend code unless the user specifically requested a static client-side simulation of data. deployRocket saves the generated Vite build files to GitHub.",
+              "Do not generate backend code, API routes, serverless functions, database clients, or server-only package scripts. If the user asks for those capabilities, implement a static client-side simulation instead. deployRocket saves the generated Vite build files to GitHub.",
               "Important output rule:",
               "- For each file, set contentBase64 to base64(UTF-8 file content).",
               "- Do not wrap base64 text in markdown fences.",
@@ -168,6 +172,7 @@ export class CodexRunner {
 
   private normalizeGeneratedProject(generated: GeneratedProject): GeneratedProject {
     const byPath = new Map<string, string>();
+    const removedServerOnlyPaths: string[] = [];
 
     for (const file of generated.files) {
       const normalizedPath = file.path.replace(/\\/g, "/").replace(/^\.\/+/, "");
@@ -185,6 +190,11 @@ export class CodexRunner {
         });
       }
 
+      if (serverOnlyPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
+        removedServerOnlyPaths.push(normalizedPath);
+        continue;
+      }
+
       byPath.set(normalizedPath, file.content);
     }
 
@@ -192,6 +202,12 @@ export class CodexRunner {
 
     return {
       ...generated,
+      warnings: removedServerOnlyPaths.length
+        ? [
+            ...generated.warnings,
+            `Removed server-only files so the generated app remains GitHub Pages compatible: ${removedServerOnlyPaths.join(", ")}`
+          ]
+        : generated.warnings,
       files: [...byPath.entries()].map(([path, content]) => ({ path, content }))
     };
   }
@@ -213,7 +229,8 @@ function createRescueGeneratedProject(
       "Codex did not return a structured generated_project payload, so deployRocket generated a compact static Vite React rescue build from the approved requirements.",
     setupNotes: [
       "Run npm install, then npm run dev for local development.",
-      "The app is static and can be built with npm run build.",
+      "The app is static, serverless, and can be built with npm run build.",
+      "The Vite config uses a relative asset base so the build works from a GitHub Pages project path.",
       "Use Edit Mission later to ask Codex for richer follow-up features."
     ],
     warnings: [
@@ -285,7 +302,8 @@ function rescueViteConfig() {
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()]
+  plugins: [react()],
+  base: "./"
 });
 `;
 }
@@ -620,7 +638,8 @@ function rescueReadme(appTitle: string, summary: string) {
     "",
     "## Notes",
     "",
-    "deployRocket saved this static Vite build to GitHub.",
+    "deployRocket saved this static, serverless Vite build to GitHub. It does not need a backend or server runtime.",
+    "The Vite config uses a relative asset base so the production build can be hosted from a GitHub Pages project path.",
     ""
   ].join("\n");
 }
@@ -665,7 +684,9 @@ function compactPromptPlan(promptPlan: CodexPromptPlan) {
     summary: promptPlan.summary,
     architectureInstructions: promptPlan.architectureInstructions.slice(0, 5),
     frontendInstructions: promptPlan.frontendInstructions.slice(0, 8),
-    backendInstructions: promptPlan.backendInstructions.slice(0, 3),
+    backendInstructions: [
+      "No backend, server runtime, API routes, serverless functions, databases, secrets, or server-only package scripts. Simulate backend-like behavior in the browser only."
+    ],
     acceptanceCriteria: promptPlan.acceptanceCriteria.slice(0, 8)
   };
 }
@@ -725,18 +746,7 @@ function ensureBuildFiles(files: Map<string, string>) {
     );
   }
 
-  if (!files.has("vite.config.ts")) {
-    files.set(
-      "vite.config.ts",
-      `import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()]
-});
-`
-    );
-  }
+  ensureGithubPagesViteConfig(files);
 
   if (!files.has("tsconfig.json")) {
     files.set(
@@ -770,6 +780,36 @@ export default defineConfig({
 
   files.delete(".github/workflows/pages.yml");
   files.delete(".nojekyll");
+}
+
+function ensureGithubPagesViteConfig(files: Map<string, string>) {
+  const configPath = files.has("vite.config.ts")
+    ? "vite.config.ts"
+    : files.has("vite.config.js")
+      ? "vite.config.js"
+      : "vite.config.ts";
+
+  const current = files.get(configPath);
+  if (!current) {
+    files.set(configPath, defaultViteConfig());
+    return;
+  }
+
+  if (/\bbase\s*:/.test(current)) return;
+
+  const withBase = current.replace(/defineConfig\(\s*{/, 'defineConfig({\n  base: "./",');
+  files.set(configPath, withBase === current ? defaultViteConfig() : withBase);
+}
+
+function defaultViteConfig() {
+  return `import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  base: "./"
+});
+`;
 }
 
 export const codexRunner = new CodexRunner();

@@ -16,6 +16,8 @@ interface GitHubRepoResponse {
   name: string;
   full_name: string;
   html_url: string;
+  homepage?: string | null;
+  has_pages?: boolean;
   topics?: string[];
   owner: {
     login: string;
@@ -49,6 +51,15 @@ interface GitHubContentResponse {
   encoding?: string;
   sha: string;
   type: string;
+}
+
+interface GitHubPagesResponse {
+  html_url?: string;
+  status?: string;
+  source?: {
+    branch?: string;
+    path?: string;
+  };
 }
 
 interface ApiOptions {
@@ -436,6 +447,81 @@ export class GitHubManager {
     return files;
   }
 
+  async getGitHubPages(owner: string, repo: string, sessionId: string, signal?: AbortSignal) {
+    const github = await this.ensureAuthenticated(sessionId, signal);
+    const pages = await this.getPagesSite(owner, repo, github.accessToken, signal);
+    if (!pages) return null;
+
+    return {
+      url: normalizeUrl(pages.html_url) ?? defaultGitHubPagesUrl(owner, repo),
+      status: pages.status ?? "unknown"
+    };
+  }
+
+  async configureGitHubPages(params: {
+    owner: string;
+    repo: string;
+    sessionId: string;
+    signal?: AbortSignal;
+  }) {
+    const github = await this.ensureAuthenticated(params.sessionId, params.signal);
+    const existing = await this.getPagesSite(
+      params.owner,
+      params.repo,
+      github.accessToken,
+      params.signal
+    );
+    const body = { build_type: "workflow" };
+
+    if (existing) {
+      await this.api(`/repos/${params.owner}/${params.repo}/pages`, {
+        method: "PUT",
+        token: github.accessToken,
+        body,
+        signal: params.signal
+      });
+    } else {
+      try {
+        await this.api(`/repos/${params.owner}/${params.repo}/pages`, {
+          method: "POST",
+          token: github.accessToken,
+          body,
+          signal: params.signal
+        });
+      } catch (error) {
+        if (!(error instanceof AppError) || (error.statusCode !== 409 && error.statusCode !== 422)) {
+          throw error;
+        }
+        await this.api(`/repos/${params.owner}/${params.repo}/pages`, {
+          method: "PUT",
+          token: github.accessToken,
+          body,
+          signal: params.signal
+        });
+      }
+    }
+
+    const pages = await this.getPagesSite(
+      params.owner,
+      params.repo,
+      github.accessToken,
+      params.signal
+    );
+    const url = normalizeUrl(pages?.html_url) ?? defaultGitHubPagesUrl(params.owner, params.repo);
+    await this.updateRepositoryHomepage(
+      params.owner,
+      params.repo,
+      url,
+      github.accessToken,
+      params.signal
+    );
+
+    return {
+      url,
+      status: pages?.status ?? "publishing"
+    };
+  }
+
   private async setTopics(
     owner: string,
     repo: string,
@@ -448,6 +534,34 @@ export class GitHubManager {
       method: "PUT",
       token: github.accessToken,
       body: { names: topics },
+      signal
+    });
+  }
+
+  private async getPagesSite(
+    owner: string,
+    repo: string,
+    token: string,
+    signal?: AbortSignal
+  ) {
+    return this.api<GitHubPagesResponse | null>(`/repos/${owner}/${repo}/pages`, {
+      token,
+      signal,
+      allow404: true
+    });
+  }
+
+  private async updateRepositoryHomepage(
+    owner: string,
+    repo: string,
+    homepage: string,
+    token: string,
+    signal?: AbortSignal
+  ) {
+    await this.api<GitHubRepoResponse>(`/repos/${owner}/${repo}`, {
+      method: "PATCH",
+      token,
+      body: { homepage },
       signal
     });
   }
@@ -549,6 +663,20 @@ export class GitHubManager {
 
 function encodePath(path: string) {
   return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function normalizeUrl(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+}
+
+function defaultGitHubPagesUrl(owner: string, repo: string) {
+  const ownerPath = owner.toLowerCase();
+  if (repo.toLowerCase() === `${ownerPath}.github.io`) {
+    return `https://${ownerPath}.github.io/`;
+  }
+  return `https://${ownerPath}.github.io/${encodeURIComponent(repo)}/`;
 }
 
 function safeJson(text: string) {

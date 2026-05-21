@@ -1,8 +1,8 @@
-import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
-import { AppError, setupHelp } from "../lib/errors.js";
+import { AppError } from "../lib/errors.js";
+import { getOpenAIClientForRequest } from "./openaiClient.js";
 import type {
   CodexPromptPlan,
   GeneratedFile,
@@ -21,21 +21,6 @@ const CodexPromptPlanSchema = z.object({
 });
 
 export class PromptArchitect {
-  private client: OpenAI | null = null;
-
-  private getClient() {
-    if (!config.openaiApiKey) {
-      throw new AppError("OpenAI is not configured.", {
-        statusCode: 500,
-        code: "OPENAI_NOT_CONFIGURED",
-        setupInstructions: setupHelp.openai
-      });
-    }
-
-    this.client ??= new OpenAI({ apiKey: config.openaiApiKey });
-    return this.client;
-  }
-
   async createPromptPlan(
     requirements: StructuredRequirements,
     mode: "create" | "edit",
@@ -43,7 +28,7 @@ export class PromptArchitect {
     userText: string,
     signal: AbortSignal
   ): Promise<CodexPromptPlan> {
-    const client = this.getClient();
+    const client = getOpenAIClientForRequest();
     const previousManifest = previousFiles.map((file) => file.path);
 
     const response = await client.responses.parse(
@@ -56,7 +41,9 @@ export class PromptArchitect {
               "You are Agent 2, the Prompt Architect.",
               "Turn product requirements into a high-quality Codex implementation prompt.",
               "The downstream project must be a static Vite React TypeScript application.",
-              "Do not request secrets or server-side services in generated code."
+              "The generated app must be serverless and browser-only so it can deploy to GitHub Pages.",
+              "Do not request secrets, backend code, server-side services, serverless functions, databases, or private APIs in generated code.",
+              "Represent any backend-like behavior with localStorage, in-memory state, or static sample data."
             ].join("\n")
           },
           {
@@ -69,6 +56,7 @@ export class PromptArchitect {
               "",
               "Produce a prompt that tells Codex to return a complete replacement file set.",
               "The generated app should be production-oriented, mobile-first, accessible, and visually polished.",
+              "The generated app must build into static assets that work on GitHub Pages, including repository subpath deployments.",
               "It must include buildable Vite React TypeScript files and avoid placeholder TODOs."
             ].join("\n")
           }

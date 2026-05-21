@@ -1,5 +1,6 @@
 import { config, isGithubOAuthConfigured } from "../config.js";
-import { getGithubAuthFromContext } from "../state/requestContext.js";
+import { getBillingPlan } from "../billing/openaiBilling.js";
+import { getCustomerAccountFromContext, getGithubAuthFromContext } from "../state/requestContext.js";
 import type { SetupStatus } from "../../shared/types.js";
 
 function unique(items: string[]) {
@@ -16,17 +17,42 @@ function githubOAuthMissing() {
 
 export function getSetupStatus(callbackUrl?: string): SetupStatus {
   const github = getGithubAuthFromContext();
+  const account = getCustomerAccountFromContext();
   const githubAuthMissing = githubOAuthMissing();
   if (!github) githubAuthMissing.push("Connect your GitHub account");
 
-  const projectEditingMissing = [...githubAuthMissing];
-  if (!config.openaiApiKey) projectEditingMissing.unshift("OPENAI_API_KEY");
+  const userOpenAIConnected = Boolean(account?.openai?.apiKey);
+  const platformOpenAIReady = config.allowPlatformOpenAIFallback && Boolean(config.openaiApiKey);
+  const openaiReady = userOpenAIConnected || platformOpenAIReady;
+  const openaiMissing = openaiReady ? [] : ["Connect your OpenAI API client token"];
+
+  const billingReady = account?.billing?.status === "mock_active" || account?.billing?.status === "active";
+  const billingMissing = billingReady ? [] : ["Activate mock $5 billing"];
+
+  const projectEditingMissing = [...openaiMissing, ...githubAuthMissing, ...billingMissing];
 
   const githubOAuthConfigured = isGithubOAuthConfigured();
   const githubConnected = Boolean(github);
+  const billingPlan = getBillingPlan();
 
   return {
-    openaiConfigured: Boolean(config.openaiApiKey),
+    openaiConfigured: openaiReady,
+    openaiConnection: {
+      connected: userOpenAIConnected,
+      source: userOpenAIConnected ? "user" : platformOpenAIReady ? "platform" : "missing",
+      connectedAt: account?.openai?.connectedAt,
+      keyFingerprint: account?.openai?.keyFingerprint,
+      clientIdConfigured: Boolean(account?.openai?.clientId)
+    },
+    billing: {
+      connected: billingReady,
+      mode: account?.billing?.mode ?? "mock",
+      status: account?.billing?.status ?? "inactive",
+      plan: account?.billing?.plan ?? billingPlan,
+      activatedAt: account?.billing?.activatedAt,
+      lastIntentId: account?.billing?.intentId,
+      commissionRecipientConfigured: Boolean(config.platformCommissionAccountId)
+    },
     githubOAuthConfigured,
     githubConnected,
     githubUser: github
@@ -40,12 +66,20 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
     defaultBranch: config.githubDefaultBranch,
     missing: unique(projectEditingMissing),
     features: {
+      openaiClient: {
+        ready: openaiReady,
+        missing: unique(openaiMissing)
+      },
       githubAuth: {
         ready: githubOAuthConfigured && githubConnected,
         missing: unique(githubAuthMissing)
       },
+      billing: {
+        ready: billingReady,
+        missing: unique(billingMissing)
+      },
       projectEditing: {
-        ready: Boolean(config.openaiApiKey) && githubOAuthConfigured && githubConnected,
+        ready: openaiReady && githubOAuthConfigured && githubConnected && billingReady,
         missing: unique(projectEditingMissing)
       }
     }

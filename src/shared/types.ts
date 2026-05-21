@@ -99,6 +99,9 @@ export interface Project {
   githubDefaultBranch?: string;
   githubLastCommitSha?: string;
   githubWorkflowRunId?: number;
+  githubPagesUrl?: string;
+  githubPagesStatus?: string;
+  githubPagesUpdatedAt?: string;
   codexRunId?: string;
   error: ProjectError | null;
   createdAt: string;
@@ -116,8 +119,35 @@ export interface JsonDatabase {
   projects: Project[];
 }
 
+export interface BillingPlan {
+  currency: "USD";
+  totalCents: number;
+  openaiApiBudgetCents: number;
+  platformCommissionCents: number;
+}
+
+export interface OpenAIConnectionStatus {
+  connected: boolean;
+  source: "user" | "platform" | "missing";
+  connectedAt?: string;
+  keyFingerprint?: string;
+  clientIdConfigured: boolean;
+}
+
+export interface BillingStatus {
+  connected: boolean;
+  mode: "mock" | "live";
+  status: "inactive" | "mock_active" | "active";
+  plan: BillingPlan;
+  activatedAt?: string;
+  lastIntentId?: string;
+  commissionRecipientConfigured: boolean;
+}
+
 export interface SetupStatus {
   openaiConfigured: boolean;
+  openaiConnection: OpenAIConnectionStatus;
+  billing: BillingStatus;
   githubOAuthConfigured: boolean;
   githubConnected: boolean;
   githubUser?: {
@@ -129,7 +159,15 @@ export interface SetupStatus {
   defaultBranch: string;
   missing: string[];
   features?: {
+    openaiClient: {
+      ready: boolean;
+      missing: string[];
+    };
     githubAuth: {
+      ready: boolean;
+      missing: string[];
+    };
+    billing: {
       ready: boolean;
       missing: string[];
     };

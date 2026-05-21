@@ -40,6 +40,9 @@ export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.2",
   openaiCodexModel: process.env.OPENAI_CODEX_MODEL ?? "gpt-5.2-codex",
+  allowPlatformOpenAIFallback: process.env.ALLOW_PLATFORM_OPENAI_FALLBACK === "true",
+  openaiBillingApiBase: process.env.OPENAI_BILLING_API_BASE?.trim() ?? "",
+  platformCommissionAccountId: process.env.PLATFORM_COMMISSION_ACCOUNT_ID?.trim() ?? "",
   githubClientId: process.env.GITHUB_CLIENT_ID?.trim() ?? "",
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET?.trim() ?? "",
   githubCallbackUrl:
@@ -62,7 +65,7 @@ export const config = {
 export function getMissingConfig() {
   const missing: string[] = [];
 
-  if (!config.openaiApiKey) missing.push("OPENAI_API_KEY");
+  if (config.allowPlatformOpenAIFallback && !config.openaiApiKey) missing.push("OPENAI_API_KEY");
   if (!config.githubClientId) missing.push("GITHUB_CLIENT_ID");
   if (!config.githubClientSecret) missing.push("GITHUB_CLIENT_SECRET");
   if (!config.githubCallbackUrl) missing.push("GITHUB_CALLBACK_URL");

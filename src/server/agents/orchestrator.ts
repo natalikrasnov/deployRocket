@@ -26,6 +26,76 @@ function generationActionMessage(generated: GeneratedProject) {
     : `Codex generated ${generated.files.length} project files`;
 }
 
+const pagesWorkflowPath = ".github/workflows/deployrocket-pages.yml";
+
+function withGitHubPagesWorkflow(files: GeneratedFile[], branch: string) {
+  return [
+    ...files.filter((file) => file.path !== pagesWorkflowPath),
+    {
+      path: pagesWorkflowPath,
+      content: renderGitHubPagesWorkflow(branch)
+    }
+  ];
+}
+
+function renderGitHubPagesWorkflow(branch: string) {
+  return [
+    "name: Deploy to GitHub Pages",
+    "",
+    "on:",
+    "  push:",
+    `    branches: [${JSON.stringify(branch)}]`,
+    "  workflow_dispatch:",
+    "",
+    "permissions:",
+    "  contents: read",
+    "  pages: write",
+    "  id-token: write",
+    "",
+    "concurrency:",
+    "  group: pages",
+    "  cancel-in-progress: true",
+    "",
+    "jobs:",
+    "  deploy:",
+    "    environment:",
+    "      name: github-pages",
+    "      url: ${{ steps.deployment.outputs.page_url }}",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - name: Checkout",
+    "        uses: actions/checkout@v6",
+    "      - name: Set up Node",
+    "        uses: actions/setup-node@v6",
+    "        with:",
+    "          node-version: lts/*",
+    "      - name: Install dependencies",
+    "        run: |",
+    "          if [ -f package-lock.json ]; then",
+    "            npm ci",
+    "          else",
+    "            npm install",
+    "          fi",
+    "      - name: Build",
+    "        run: |",
+    "          if [ \"${{ github.event.repository.name }}\" = \"${{ github.repository_owner }}.github.io\" ]; then",
+    "            npm run build",
+    "          else",
+    "            npm run build -- --base=\"/${{ github.event.repository.name }}/\"",
+    "          fi",
+    "      - name: Setup Pages",
+    "        uses: actions/configure-pages@v6",
+    "      - name: Upload artifact",
+    "        uses: actions/upload-pages-artifact@v5",
+    "        with:",
+    "          path: ./dist",
+    "      - name: Deploy to GitHub Pages",
+    "        id: deployment",
+    "        uses: actions/deploy-pages@v5",
+    ""
+  ].join("\n");
+}
+
 export class Orchestrator {
   private activeRuns = new Map<string, ActiveRun>();
 
@@ -225,7 +295,9 @@ export class Orchestrator {
       });
     }
 
-    return project;
+    return this.syncGitHubPagesDeployment(project.id, githubSessionId, controller.signal, {
+      ensureWorkflow: Boolean(project.githubLastCommitSha || project.lastCommittedPaths.length > 0)
+    });
   }
 
   private async run(
@@ -494,11 +566,29 @@ export class Orchestrator {
       current.githubDefaultBranch = repository.branch;
     });
 
+    await projectStore.setStatus(
+      projectId,
+      "SAVING_TO_GITHUB",
+      "Configuring GitHub Pages",
+      "Configuring GitHub Pages publishing"
+    );
+    await this.syncGitHubPagesDeployment(projectId, githubSessionId, signal, {
+      ensureWorkflow: false,
+      configureIfMissing: true
+    });
+    await projectStore.setStatus(
+      projectId,
+      "SAVING_TO_GITHUB",
+      "Saving files to GitHub",
+      "Preparing GitHub Pages deployment"
+    );
+
+    const filesToCommit = withGitHubPagesWorkflow(files, repository.branch);
     const commitSha = await githubManager.commitFiles({
       owner: repository.owner,
       repo: repository.repo,
       branch: repository.branch,
-      files,
+      files: filesToCommit,
       previousPaths: currentProject.lastCommittedPaths,
       message:
         kind === "create"
@@ -512,6 +602,7 @@ export class Orchestrator {
     await projectStore.updateProject(projectId, (current) => {
       current.githubLastCommitSha = commitSha;
       current.lastCommittedPaths = files.map((file) => file.path);
+      if (current.githubPagesUrl) current.githubPagesStatus = "publishing";
     });
     await projectStore.addAction(projectId, "Files committed to GitHub", "success", commitSha);
   }
@@ -528,7 +619,11 @@ export class Orchestrator {
   private async completeGithubSave(projectId: string) {
     await projectStore.updateProject(projectId, (current) => {
       current.status = "LIVE";
-      current.currentStep = "Saved to GitHub";
+      current.currentStep = current.githubPagesUrl
+        ? current.githubPagesStatus === "built"
+          ? "Live on GitHub Pages"
+          : "Publishing to GitHub Pages"
+        : "Saved to GitHub";
       current.error = null;
       delete current.activeInputId;
       delete current.activeRunKind;
@@ -543,6 +638,92 @@ export class Orchestrator {
         "success"
       );
     }
+  }
+
+  private async syncGitHubPagesDeployment(
+    projectId: string,
+    githubSessionId: string,
+    signal: AbortSignal,
+    options: { ensureWorkflow: boolean; configureIfMissing?: boolean }
+  ) {
+    const project = await this.requireProject(projectId);
+    if (!project.githubOwner || !project.githubRepo) return project;
+
+    const branch = project.githubDefaultBranch ?? config.githubDefaultBranch;
+    const shouldConfigure = options.ensureWorkflow || Boolean(options.configureIfMissing && !project.githubPagesUrl);
+    const pages = shouldConfigure
+      ? await githubManager.configureGitHubPages({
+          owner: project.githubOwner,
+          repo: project.githubRepo,
+          sessionId: githubSessionId,
+          signal
+        })
+      : await githubManager.getGitHubPages(
+          project.githubOwner,
+          project.githubRepo,
+          githubSessionId,
+          signal
+        );
+
+    if (!pages) return project;
+
+    const workflowChanged = options.ensureWorkflow
+      ? await this.ensureGitHubPagesWorkflowFile(project, branch, signal)
+      : false;
+
+    const hadPagesUrl = Boolean(project.githubPagesUrl);
+    const nextStatus = workflowChanged || (options.ensureWorkflow && pages.status !== "built")
+      ? "publishing"
+      : pages.status;
+    await projectStore.updateProject(projectId, (current) => {
+      current.githubPagesUrl = pages.url;
+      current.githubPagesStatus = nextStatus;
+      current.githubPagesUpdatedAt = nowIso();
+
+      if (current.status === "LIVE") {
+        current.currentStep = pagesStep(nextStatus);
+      } else if (current.status === "FAILED" && isDeploymentOnlyFailure(current)) {
+        current.status = "LIVE";
+        current.currentStep = pagesStep(nextStatus);
+        current.error = null;
+        delete current.activeInputId;
+        delete current.activeRunKind;
+        delete current.pagesDispatchRequestedAt;
+        delete current.continueContext;
+      }
+    });
+
+    const latest = await this.requireProject(projectId);
+    if (!hadPagesUrl && latest.githubPagesUrl) {
+      await projectStore.addAction(projectId, "GitHub Pages link ready", "success", latest.githubPagesUrl);
+    }
+    return this.requireProject(projectId);
+  }
+
+  private async ensureGitHubPagesWorkflowFile(project: Project, branch: string, signal: AbortSignal) {
+    if (!project.githubOwner || !project.githubRepo) return false;
+
+    const content = renderGitHubPagesWorkflow(branch);
+    const existing = await githubManager.getTextFile(
+      project.githubOwner,
+      project.githubRepo,
+      pagesWorkflowPath,
+      branch,
+      signal
+    );
+    if (existing?.content === content) return false;
+
+    await githubManager.putTextFile({
+      owner: project.githubOwner,
+      repo: project.githubRepo,
+      path: pagesWorkflowPath,
+      branch,
+      baseBranch: branch,
+      content,
+      message: "Configure deployRocket GitHub Pages workflow",
+      signal
+    });
+    return true;
   }
 
   private async runFromCurrentStatus(projectId: string, githubSessionId: string, signal: AbortSignal) {
@@ -708,10 +889,18 @@ export class Orchestrator {
     const status = getSetupStatus();
 
     if (!status.openaiConfigured) {
-      throw new AppError("OpenAI is not configured.", {
-        statusCode: 500,
-        code: "OPENAI_NOT_CONFIGURED",
-        setupInstructions: setupHelp.openai
+      throw new AppError("OpenAI client billing is not connected.", {
+        statusCode: 401,
+        code: "OPENAI_CLIENT_NOT_CONNECTED",
+        setupInstructions: setupHelp.openaiCustomer
+      });
+    }
+
+    if (!status.billing.connected) {
+      throw new AppError("Billing is not active.", {
+        statusCode: 402,
+        code: "BILLING_NOT_CONNECTED",
+        setupInstructions: setupHelp.openaiBilling
       });
     }
 
@@ -867,6 +1056,18 @@ export class Orchestrator {
 
 function repositoryNameFor(requirements: StructuredRequirements, project: Project) {
   return requirements.repositoryNameSuggestion || requirements.projectName || project.name || project.githubRepo || "deployrocket-project";
+}
+
+function pagesStep(status: string | undefined) {
+  return status === "built" ? "Live on GitHub Pages" : "Publishing to GitHub Pages";
+}
+
+function isDeploymentOnlyFailure(project: Project) {
+  const text = [project.error?.code, project.error?.message, project.error?.details]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /\b(vercel|pages?|deploy|deployment|publish|publishing)\b/.test(text);
 }
 
 export const orchestrator = new Orchestrator();

@@ -7,13 +7,14 @@ import multer from "multer";
 import path from "node:path";
 import { config, paths } from "./config.js";
 import { githubManager } from "./agents/githubManager.js";
+import { billingStateFromIntent, createMockOpenAIBillingIntent } from "./billing/openaiBilling.js";
 import { orchestrator } from "./agents/orchestrator.js";
 import { getSetupStatus } from "./features/capabilities.js";
 import { AppError, toReadableError } from "./lib/errors.js";
 import { createId, nowIso } from "./lib/id.js";
 import { projectStore } from "./state/projectStore.js";
-import { requestContext, setGithubAuthInContext } from "./state/requestContext.js";
-import type { GitHubAuthState } from "./state/authStore.js";
+import { requestContext, setCustomerAccountInContext, setGithubAuthInContext } from "./state/requestContext.js";
+import type { CustomerAccountState, GitHubAuthState } from "./state/authStore.js";
 import type { ProjectInputImage, ProjectInputRecord } from "../shared/types.js";
 
 const app = express();
@@ -59,8 +60,10 @@ app.use(
 app.use((req, res, next) => {
   ensureBrowserSession(req, res);
   const github = readEncryptedJsonCookie<GitHubAuthState>(req, GITHUB_AUTH_COOKIE);
+  const account = readEncryptedJsonCookie<CustomerAccountState>(req, ACCOUNT_AUTH_COOKIE);
   setRequestGithubAuth(req, github);
-  requestContext.run({ github }, () => next());
+  setRequestAccount(req, account);
+  requestContext.run({ github, account }, () => next());
 });
 
 app.get("/api/health", (_req, res) => {
@@ -106,6 +109,93 @@ app.post("/api/auth/github/disconnect", async (req, res, next) => {
     await githubManager.disconnect(githubSessionIdFrom(req));
     clearCookie(res, GITHUB_AUTH_COOKIE);
     setGithubAuthInContext(null);
+    res.json(getSetupStatus(getCallbackUrl(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/openai", async (req, res, next) => {
+  try {
+    const apiKey = String(req.body.apiKey ?? req.body.openaiApiKey ?? "").trim();
+    const clientId = String(req.body.clientId ?? "").trim();
+
+    if (!apiKey) {
+      throw new AppError("OpenAI API key or client token is required.", {
+        statusCode: 400,
+        code: "OPENAI_CLIENT_TOKEN_REQUIRED"
+      });
+    }
+
+    const nextAccount: CustomerAccountState = {
+      ...(accountFromRequest(req) ?? {}),
+      openai: {
+        apiKey,
+        clientId: clientId || undefined,
+        keyFingerprint: fingerprintSecret(apiKey),
+        connectedAt: nowIso()
+      }
+    };
+
+    setEncryptedJsonCookie(res, ACCOUNT_AUTH_COOKIE, nextAccount, 60 * 60 * 24 * 30);
+    setRequestAccount(req, nextAccount);
+    setCustomerAccountInContext(nextAccount);
+    res.json(getSetupStatus(getCallbackUrl(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/openai/disconnect", async (req, res, next) => {
+  try {
+    const current = accountFromRequest(req);
+    const nextAccount = current ? { ...current, openai: undefined, billing: undefined } : null;
+
+    if (nextAccount) {
+      setEncryptedJsonCookie(res, ACCOUNT_AUTH_COOKIE, nextAccount, 60 * 60 * 24 * 30);
+    } else {
+      clearCookie(res, ACCOUNT_AUTH_COOKIE);
+    }
+
+    setRequestAccount(req, nextAccount);
+    setCustomerAccountInContext(nextAccount);
+    res.json(getSetupStatus(getCallbackUrl(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/billing/mock", async (req, res, next) => {
+  try {
+    const current = accountFromRequest(req);
+    const intent = await createMockOpenAIBillingIntent(current);
+    const nextAccount: CustomerAccountState = {
+      ...(current ?? {}),
+      billing: billingStateFromIntent(intent)
+    };
+
+    setEncryptedJsonCookie(res, ACCOUNT_AUTH_COOKIE, nextAccount, 60 * 60 * 24 * 30);
+    setRequestAccount(req, nextAccount);
+    setCustomerAccountInContext(nextAccount);
+    res.json(getSetupStatus(getCallbackUrl(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/billing/disconnect", async (req, res, next) => {
+  try {
+    const current = accountFromRequest(req);
+    const nextAccount = current ? { ...current, billing: undefined } : null;
+
+    if (nextAccount) {
+      setEncryptedJsonCookie(res, ACCOUNT_AUTH_COOKIE, nextAccount, 60 * 60 * 24 * 30);
+    } else {
+      clearCookie(res, ACCOUNT_AUTH_COOKIE);
+    }
+
+    setRequestAccount(req, nextAccount);
+    setCustomerAccountInContext(nextAccount);
     res.json(getSetupStatus(getCallbackUrl(req)));
   } catch (error) {
     next(error);
@@ -305,6 +395,7 @@ async function bootstrap() {
 const SESSION_COOKIE = "deployrocket_sid";
 const GITHUB_STATE_COOKIE = "deployrocket_github_state";
 const GITHUB_AUTH_COOKIE = "deployrocket_github_auth";
+const ACCOUNT_AUTH_COOKIE = "deployrocket_account_auth";
 
 function ensureBrowserSession(req: Request, res: Response) {
   const existing = readSignedCookie(req, SESSION_COOKIE);
@@ -323,12 +414,20 @@ function setRequestGithubAuth(req: Request, github: GitHubAuthState | null) {
   (req as Request & { deployRocketGithubAuth?: GitHubAuthState | null }).deployRocketGithubAuth = github;
 }
 
+function setRequestAccount(req: Request, account: CustomerAccountState | null) {
+  (req as Request & { deployRocketAccount?: CustomerAccountState | null }).deployRocketAccount = account;
+}
+
 function githubAuthFromRequest(req: Request) {
   return (req as Request & { deployRocketGithubAuth?: GitHubAuthState | null }).deployRocketGithubAuth ?? null;
 }
 
+function accountFromRequest(req: Request) {
+  return (req as Request & { deployRocketAccount?: CustomerAccountState | null }).deployRocketAccount ?? null;
+}
+
 function restoreRequestContext(req: Request, _res: Response, next: NextFunction) {
-  requestContext.run({ github: githubAuthFromRequest(req) }, () => next());
+  requestContext.run({ github: githubAuthFromRequest(req), account: accountFromRequest(req) }, () => next());
 }
 
 function readSignedCookie(req: Request, name: string) {
@@ -403,6 +502,10 @@ function readCookies(req: Request, name: string) {
 
 function signCookieValue(value: string) {
   return crypto.createHmac("sha256", config.sessionSecret).update(value).digest("base64url");
+}
+
+function fingerprintSecret(value: string) {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 function sealJson<T>(value: T) {

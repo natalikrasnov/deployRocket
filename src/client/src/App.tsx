@@ -4,11 +4,16 @@ import {
   ArrowLeft,
   CheckCircle2,
   Circle,
+  CreditCard,
+  DollarSign,
   ExternalLink,
+  Globe2,
   Github,
   ImageUp,
+  KeyRound,
   LayoutDashboard,
   Loader2,
+  Lock,
   Mic,
   PauseCircle,
   Plus,
@@ -16,6 +21,7 @@ import {
   Rocket,
   Send,
   Settings,
+  ShieldCheck,
   Square,
   Unplug,
   Wand2,
@@ -28,6 +34,7 @@ import type { ActionLevel, Project, ProjectAction, ProjectStatus, SetupStatus } 
 
 type View =
   | { name: "dashboard" }
+  | { name: "settings" }
   | { name: "new" }
   | { name: "detail"; projectId: string }
   | { name: "edit"; projectId: string };
@@ -134,6 +141,40 @@ function statusLabel(status: ProjectStatus) {
   return status.replaceAll("_", " ");
 }
 
+function hasGeneratedSite(project: Project) {
+  return Boolean(project.githubLastCommitSha || project.lastCommittedPaths.length > 0);
+}
+
+function inferredGitHubPagesUrl(project: Project) {
+  if (!project.githubOwner || !project.githubRepo) return null;
+  const owner = project.githubOwner.toLowerCase();
+  const repo = project.githubRepo;
+  if (repo.toLowerCase() === `${owner}.github.io`) return `https://${owner}.github.io/`;
+  return `https://${owner}.github.io/${encodeURIComponent(repo)}/`;
+}
+
+function projectSiteUrl(project: Project) {
+  return project.githubPagesUrl ?? (hasGeneratedSite(project) ? inferredGitHubPagesUrl(project) : null);
+}
+
+function pagesStatusText(project: Project) {
+  if (!hasGeneratedSite(project) && project.status !== "SAVING_TO_GITHUB") return null;
+  if (project.githubPagesStatus === "built") return "GitHub Pages is live.";
+  if (project.githubPagesStatus === "errored") return "GitHub Pages needs attention.";
+  if (project.status === "SAVING_TO_GITHUB" || project.githubPagesStatus === "publishing") return "GitHub Pages is publishing.";
+  return "GitHub Pages is being prepared.";
+}
+
+function shouldSyncPages(project: Project) {
+  return Boolean(
+    !isRunning(project) &&
+      project.githubOwner &&
+      project.githubRepo &&
+      hasGeneratedSite(project) &&
+      (!project.githubPagesUrl || project.githubPagesStatus === "publishing")
+  );
+}
+
 export default function App() {
   const [view, setView] = useState<View>({ name: "dashboard" });
   const [projects, setProjects] = useState<Project[]>([]);
@@ -143,6 +184,7 @@ export default function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [confirmEdit, setConfirmEdit] = useState<Project | null>(null);
   const [popup, setPopup] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const pagesSyncRequestedRef = useRef<Set<string>>(new Set());
 
   const selectedProject = useMemo(() => {
     if (view.name !== "detail" && view.name !== "edit") return null;
@@ -155,6 +197,12 @@ export default function App() {
     setSetupError(null);
     setProjects(nextSetup.githubConnected ? await api.listProjects() : []);
   }, []);
+
+  const applySetup = async (nextSetup: SetupStatus) => {
+    setSetup(nextSetup);
+    setSetupError(null);
+    setProjects(nextSetup.githubConnected ? await api.listProjects() : []);
+  };
 
   useEffect(() => {
     refreshAll()
@@ -272,6 +320,17 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (view.name !== "detail" || !selectedProject || !shouldSyncPages(selectedProject)) return;
+    if (pagesSyncRequestedRef.current.has(selectedProject.id)) return;
+
+    pagesSyncRequestedRef.current.add(selectedProject.id);
+    refreshProject(selectedProject).catch((error) => {
+      pagesSyncRequestedRef.current.delete(selectedProject.id);
+      setNotice(readError(error));
+    });
+  }, [selectedProject, view.name]);
+
   return (
     <main className="relative flex h-dvh w-full min-w-0 flex-col overflow-hidden bg-[#05080f] text-zinc-100 md:flex-row">
       <div className="absolute inset-0 z-0 bg-[linear-gradient(155deg,rgba(5,8,15,0.99)_0%,rgba(10,11,24,0.98)_45%,rgba(15,23,42,0.96)_100%)]" />
@@ -292,8 +351,7 @@ export default function App() {
               <SetupBanner
                 setup={setup}
                 onDisconnect={async () => {
-                  setSetup(await api.disconnectGithub());
-                  await refreshAll();
+                  await applySetup(await api.disconnectGithub());
                 }}
               />
             ) : setupError ? (
@@ -305,6 +363,16 @@ export default function App() {
                 <LoadingScreen />
               ) : view.name === "dashboard" ? (
                 <Dashboard projects={projects} onOpen={openProject} />
+              ) : view.name === "settings" ? (
+                setup ? (
+                  <SettingsScreen
+                    setup={setup}
+                    onSetupChange={applySetup}
+                    onDisconnectGithub={async () => applySetup(await api.disconnectGithub())}
+                  />
+                ) : (
+                  <LoadingScreen />
+                )
               ) : view.name === "new" ? (
                 <ProjectInputScreen mode="create" onSubmit={handleCreate} onCancel={() => setView({ name: "dashboard" })} />
               ) : view.name === "edit" && selectedProject ? (
@@ -354,6 +422,7 @@ export default function App() {
 function Sidebar({ view, setView }: { view: View; setView: (v: View) => void }) {
   const isDashboard = view.name === "dashboard";
   const isNew = view.name === "new";
+  const isSettings = view.name === "settings";
   
   return (
     <aside className="hidden md:flex relative z-20 w-64 shrink-0 flex-col border-r border-white/5 bg-white/[0.01] backdrop-blur-xl p-4">
@@ -388,7 +457,14 @@ function Sidebar({ view, setView }: { view: View; setView: (v: View) => void }) 
       </nav>
 
       <div className="border-t border-white/10 pt-4 mt-auto">
-        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200">
+        <button
+          onClick={() => setView({ name: "settings" })}
+          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+            isSettings
+              ? "bg-cyan-500/15 text-cyan-300 shadow-[inset_2px_0_0_0_rgba(34,211,238,1)]"
+              : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+          }`}
+        >
           <Settings size={20} />
           Settings
         </button>
@@ -400,6 +476,7 @@ function Sidebar({ view, setView }: { view: View; setView: (v: View) => void }) 
 function BottomNav({ view, setView }: { view: View; setView: (v: View) => void }) {
   const isDashboard = view.name === "dashboard";
   const isNew = view.name === "new";
+  const isSettings = view.name === "settings";
   
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-white/5 bg-[#05080f]/80 backdrop-blur-xl px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
@@ -417,7 +494,10 @@ function BottomNav({ view, setView }: { view: View; setView: (v: View) => void }
         <Plus size={20} />
         <span className="text-[10px] font-medium tracking-wide uppercase">Launch</span>
       </button>
-      <button className="flex flex-col items-center gap-1 text-zinc-500 transition hover:text-zinc-300">
+      <button
+        onClick={() => setView({ name: "settings" })}
+        className={`flex flex-col items-center gap-1 transition ${isSettings ? "text-cyan-400" : "text-zinc-500 hover:text-zinc-300"}`}
+      >
         <Settings size={20} />
         <span className="text-[10px] font-medium tracking-wide uppercase">Settings</span>
       </button>
@@ -446,18 +526,31 @@ function AppHeader({
   onNew: () => void;
 }) {
   const showBack = view.name !== "dashboard";
+  const title =
+    view.name === "settings"
+      ? "Settings"
+      : view.name === "new"
+        ? "Launch Request"
+        : view.name === "edit"
+          ? "Mission Update"
+          : view.name === "detail"
+            ? "Project"
+            : "Dashboard";
   return (
     <header className="sticky top-0 z-20 shrink-0 border-b border-white/5 bg-[#05080f]/50 px-3 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {showBack ? (
-            <IconButton label="Back" onClick={onBack}>
-              <ArrowLeft size={19} />
-            </IconButton>
+            <>
+              <IconButton label="Back" onClick={onBack}>
+                <ArrowLeft size={19} />
+              </IconButton>
+              <h1 className="truncate text-lg font-semibold text-white sm:text-xl">{title}</h1>
+            </>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
               <LogoMark className="h-8 w-8 md:hidden" />
-              <h1 className="truncate text-lg font-semibold text-white sm:text-xl">Dashboard</h1>
+              <h1 className="truncate text-lg font-semibold text-white sm:text-xl">{title}</h1>
             </div>
           )}
         </div>
@@ -622,6 +715,292 @@ function Dashboard({
           </div>
         </button>
       ))}
+    </div>
+  );
+}
+
+function SettingsScreen({
+  setup,
+  onSetupChange,
+  onDisconnectGithub
+}: {
+  setup: SetupStatus;
+  onSetupChange: (setup: SetupStatus) => Promise<void>;
+  onDisconnectGithub: () => Promise<void>;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [editingOpenAI, setEditingOpenAI] = useState(!setup.openaiConnection.connected);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const plan = setup.billing.plan;
+
+  useEffect(() => {
+    if (setup.openaiConnection.connected) setEditingOpenAI(false);
+  }, [setup.openaiConnection.connected]);
+
+  const run = async (key: string, action: () => Promise<SetupStatus> | Promise<void>) => {
+    setBusy(key);
+    setError(null);
+    try {
+      const nextSetup = await action();
+      if (nextSetup) await onSetupChange(nextSetup);
+    } catch (actionError) {
+      setError(readError(actionError));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveOpenAI = async () => {
+    const trimmedKey = apiKey.trim();
+    if (!trimmedKey) {
+      setError("OpenAI API key or client token is required.");
+      return;
+    }
+    await run("openai", async () => {
+      const nextSetup = await api.saveOpenAIConnection({
+        apiKey: trimmedKey,
+        clientId: clientId.trim() || undefined
+      });
+      setApiKey("");
+      setClientId("");
+      return nextSetup;
+    });
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-white">Settings</h2>
+          <p className="mt-1 text-sm text-zinc-400">Connections, customer OpenAI token, and billing.</p>
+        </div>
+        <ConnectionBadge
+          ready={setup.features?.projectEditing.ready ?? false}
+          label={(setup.features?.projectEditing.ready ?? false) ? "Ready" : "Setup needed"}
+        />
+      </div>
+
+      {error ? <Notice message={error} onClose={() => setError(null)} /> : null}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4 backdrop-blur-md">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-zinc-950/70 text-zinc-200">
+                <Github size={19} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-white">GitHub</h3>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {setup.githubConnected ? `Connected as ${setup.githubUser?.login ?? "GitHub user"}` : "Not connected"}
+                </p>
+              </div>
+            </div>
+            <ConnectionBadge ready={setup.githubConnected} label={setup.githubConnected ? "Connected" : "Required"} />
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3">
+            {setup.githubUser?.avatarUrl ? (
+              <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-black/15 p-3">
+                <img src={setup.githubUser.avatarUrl} alt="" className="h-10 w-10 rounded-lg" />
+                <a
+                  href={setup.githubUser.htmlUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-sm text-cyan-200 hover:text-cyan-100"
+                >
+                  {setup.githubUser.htmlUrl}
+                </a>
+              </div>
+            ) : null}
+
+            {setup.githubConnected ? (
+              <button
+                type="button"
+                onClick={() => run("github", onDisconnectGithub)}
+                disabled={busy === "github"}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-zinc-200 transition hover:bg-white/5 disabled:opacity-60"
+              >
+                {busy === "github" ? <Loader2 className="animate-spin" size={16} /> : <Unplug size={16} />}
+                Disconnect GitHub
+              </button>
+            ) : (
+              <a
+                href={apiUrl("/auth/github")}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300"
+              >
+                <Github size={16} />
+                Connect GitHub
+              </a>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4 backdrop-blur-md">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-200">
+                <KeyRound size={19} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-white">OpenAI client</h3>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {setup.openaiConnection.connected
+                    ? "Customer token stored behind the app"
+                    : setup.openaiConnection.source === "platform"
+                      ? "Using platform fallback"
+                      : "Token required"}
+                </p>
+              </div>
+            </div>
+            <ConnectionBadge ready={setup.openaiConfigured} label={setup.openaiConfigured ? "Ready" : "Required"} />
+          </div>
+
+          {setup.openaiConnection.connected && !editingOpenAI ? (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/10 p-3 text-sm text-emerald-50">
+                <div className="flex items-center gap-2">
+                  <Lock size={15} />
+                  <span>Encrypted token stored</span>
+                </div>
+                <p className="mt-2 text-xs text-emerald-100/70">
+                  Client ID {setup.openaiConnection.clientIdConfigured ? "stored" : "not set"}
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingOpenAI(true)}
+                  className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-200 transition hover:bg-white/5"
+                >
+                  Replace token
+                </button>
+                <button
+                  type="button"
+                  onClick={() => run("openai", () => api.disconnectOpenAIConnection())}
+                  disabled={busy === "openai"}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-300/25 px-3 text-sm text-rose-100 transition hover:bg-rose-500/10 disabled:opacity-60"
+                >
+                  {busy === "openai" ? <Loader2 className="animate-spin" size={16} /> : <Unplug size={16} />}
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form
+              className="mt-4 space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveOpenAI();
+              }}
+            >
+              <label className="block text-xs font-medium uppercase tracking-[0.18em] text-zinc-500" htmlFor="openaiClientId">
+                Client ID
+              </label>
+              <input
+                id="openaiClientId"
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                className="h-10 w-full rounded-lg border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/60"
+                placeholder="Optional client identifier"
+                autoComplete="off"
+              />
+              <label className="block text-xs font-medium uppercase tracking-[0.18em] text-zinc-500" htmlFor="openaiApiKey">
+                API key or token
+              </label>
+              <input
+                id="openaiApiKey"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                className="h-10 w-full rounded-lg border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/60"
+                placeholder="Stored encrypted, never displayed"
+                type="password"
+                autoComplete="off"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={busy === "openai"}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300 disabled:opacity-60"
+                >
+                  {busy === "openai" ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+                  Save client
+                </button>
+                {setup.openaiConnection.connected ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditingOpenAI(false)}
+                    className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-300"
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            </form>
+          )}
+        </section>
+      </div>
+
+      <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4 backdrop-blur-md">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+              <CreditCard size={19} />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-semibold text-white">OpenAI API billing</h3>
+              <p className="mt-1 text-sm text-zinc-400">
+                {setup.billing.connected ? "Mock billing active" : "Mock billing inactive"}
+              </p>
+            </div>
+          </div>
+          <ConnectionBadge ready={setup.billing.connected} label={setup.billing.connected ? "Mock active" : "Required"} />
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <MoneyTile label="Total" value={formatUsd(plan.totalCents)} tone="cyan" />
+          <MoneyTile label="OpenAI budget" value={formatUsd(plan.openaiApiBudgetCents)} tone="emerald" />
+          <MoneyTile label="Commission" value={formatUsd(plan.platformCommissionCents)} tone="purple" />
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="rounded-lg border border-white/5 bg-black/15 p-3 text-sm text-zinc-300">
+            <div className="flex items-center gap-2">
+              <DollarSign size={15} className="text-cyan-300" />
+              <span>
+                Commission recipient {setup.billing.commissionRecipientConfigured ? "configured" : "pending server env"}
+              </span>
+            </div>
+            {setup.billing.lastIntentId ? (
+              <p className="mt-2 truncate text-xs text-zinc-500">Mock intent {setup.billing.lastIntentId}</p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
+            <button
+              type="button"
+              onClick={() => run("billing", () => api.activateMockBilling())}
+              disabled={busy === "billing" || !setup.openaiConnection.connected}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy === "billing" ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
+              {setup.billing.connected ? "Refresh mock" : "Activate mock"}
+            </button>
+            {setup.billing.connected ? (
+              <button
+                type="button"
+                onClick={() => run("billing", () => api.disconnectBilling())}
+                disabled={busy === "billing"}
+                className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-300 transition hover:bg-white/5 disabled:opacity-60"
+              >
+                Reset billing
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -814,6 +1193,8 @@ function ProjectDetails({
 }) {
   const [continueBusy, setContinueBusy] = useState(false);
   const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
+  const siteUrl = projectSiteUrl(project);
+  const pagesMessage = pagesStatusText(project);
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -896,7 +1277,20 @@ function ProjectDetails({
             {project.githubRepoUrl ? (
               <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
             ) : null}
-            {!project.githubRepoUrl ? (
+            {siteUrl ? (
+              <ExternalAnchor href={siteUrl} icon={<Globe2 size={16} />} label="Visit Site" />
+            ) : null}
+            {pagesMessage && (!siteUrl || project.githubPagesStatus !== "built") ? (
+              <div className="flex items-start gap-2 rounded-lg border border-cyan-400/10 bg-cyan-400/[0.04] px-3 py-2 text-xs leading-5 text-cyan-100/80">
+                {project.githubPagesStatus === "errored" ? (
+                  <AlertTriangle className="mt-0.5 shrink-0 text-amber-200" size={14} />
+                ) : (
+                  <Loader2 className="mt-0.5 shrink-0 animate-spin text-cyan-300" size={14} />
+                )}
+                <span>{pagesMessage}</span>
+              </div>
+            ) : null}
+            {!project.githubRepoUrl && !siteUrl ? (
               <p className="text-sm text-zinc-500">No links generated yet.</p>
             ) : null}
           </div>
@@ -1049,6 +1443,35 @@ function Popup({ type, message, onClose }: { type: "success" | "error"; message:
   );
 }
 
+function ConnectionBadge({ ready, label }: { ready: boolean; label: string }) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-lg border px-2 py-1 text-[11px] font-semibold uppercase ${
+        ready
+          ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-200"
+          : "border-amber-300/35 bg-amber-300/10 text-amber-100"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function MoneyTile({ label, value, tone }: { label: string; value: string; tone: "cyan" | "emerald" | "purple" }) {
+  const tones = {
+    cyan: "border-cyan-400/15 bg-cyan-400/10 text-cyan-100",
+    emerald: "border-emerald-400/15 bg-emerald-400/10 text-emerald-100",
+    purple: "border-purple-400/15 bg-purple-400/10 text-purple-100"
+  };
+
+  return (
+    <div className={`rounded-lg border p-3 ${tones[tone]}`}>
+      <p className="text-xs uppercase tracking-[0.18em] opacity-70">{label}</p>
+      <p className="mt-2 text-xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: ProjectStatus }) {
   return (
     <span
@@ -1143,6 +1566,13 @@ function EmptyProject({ onBack }: { onBack: () => void }) {
       </button>
     </div>
   );
+}
+
+function formatUsd(cents: number) {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD"
+  }).format(cents / 100);
 }
 
 function upsertProject(projects: Project[], project: Project | null) {

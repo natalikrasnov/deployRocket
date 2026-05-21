@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
-import { AppError, setupHelp } from "../lib/errors.js";
+import { AppError } from "../lib/errors.js";
+import { getOpenAIClientForRequest } from "./openaiClient.js";
 import type { ProjectInputRecord, StructuredRequirements } from "../../shared/types.js";
 
 const StructuredRequirementsSchema = z.object({
@@ -20,23 +20,8 @@ const StructuredRequirementsSchema = z.object({
 });
 
 export class InputProcessor {
-  private client: OpenAI | null = null;
-
-  private getClient() {
-    if (!config.openaiApiKey) {
-      throw new AppError("OpenAI is not configured.", {
-        statusCode: 500,
-        code: "OPENAI_NOT_CONFIGURED",
-        setupInstructions: setupHelp.openai
-      });
-    }
-
-    this.client ??= new OpenAI({ apiKey: config.openaiApiKey });
-    return this.client;
-  }
-
   async process(input: ProjectInputRecord, signal: AbortSignal): Promise<StructuredRequirements> {
-    const client = this.getClient();
+    const client = getOpenAIClientForRequest();
     const content: Array<
       | { type: "input_text"; text: string }
       | { type: "input_image"; image_url: string; detail: "auto" }
@@ -49,6 +34,8 @@ export class InputProcessor {
           "repositoryNameSuggestion must be a clean GitHub slug based on the final product name, not raw instruction words like create/build/client/serverless.",
           "If images are present, use them as visual/product context.",
           "Do not invent credentials, external services, or impossible platform capabilities.",
+          "All generated projects must be serverless browser-only web apps that can run from static files on GitHub Pages.",
+          "If the user asks for backend, API, database, auth, or scheduled jobs, capture it as client-side simulated behavior using localStorage, in-memory state, or static sample data.",
           "",
           `User text:\n${input.text || "(no text supplied; rely on images if present)"}`
         ].join("\n")
