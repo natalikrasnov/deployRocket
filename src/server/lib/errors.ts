@@ -55,13 +55,13 @@ export const setupHelp = {
   ],
   openaiCustomer: [
     "Open Settings.",
-    "Add the customer's OpenAI API key or client token.",
-    "The token is stored in an encrypted HttpOnly cookie and is never returned to the UI."
+    "Add your OpenAI API key.",
+    "The key is stored in an encrypted HttpOnly cookie and is never returned to the UI."
   ],
   openaiBilling: [
     "Open Settings.",
-    "Connect the customer's OpenAI client token.",
-    "Activate the mock $5 billing plan until the live OpenAI API billing adapter is implemented."
+    "Save your OpenAI API key.",
+    "Activate mock billing until the live OpenAI API billing adapter is implemented."
   ],
   githubOAuth: [
     "Create a GitHub OAuth App in GitHub Developer settings.",

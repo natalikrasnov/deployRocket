@@ -367,7 +367,31 @@ function normalizeLegacyProject(project: Project) {
     }
   }
 
+  if (project.status === "FAILED" && project.error && isLegacyVercelDeploymentError(project.error)) {
+    const legacyError = project.error;
+    project.error = {
+      ...legacyError,
+      message:
+        "This project failed on deployRocket's old Vercel deployment path. deployRocket now publishes generated projects with GitHub Pages; no Vercel token is required.",
+      code: "LEGACY_VERCEL_DEPLOYMENT",
+      at: legacyError.at,
+      setupInstructions: [
+        "Click Continue Mission to retry the GitHub save and GitHub Pages publish.",
+        "Refresh status after the retry to pick up the GitHub Pages link."
+      ]
+    };
+  }
+
   return project;
+}
+
+function isLegacyVercelDeploymentError(error: ProjectError | null) {
+  if (!error) return false;
+  return [error.code, error.message, error.details, ...(error.setupInstructions ?? [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes("vercel");
 }
 
 function parseDossier(markdown: string): Project | null {

@@ -24,10 +24,11 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
   const userOpenAIConnected = Boolean(account?.openai?.apiKey);
   const platformOpenAIReady = config.allowPlatformOpenAIFallback && Boolean(config.openaiApiKey);
   const openaiReady = userOpenAIConnected || platformOpenAIReady;
-  const openaiMissing = openaiReady ? [] : ["Connect your OpenAI API client token"];
+  const openaiMissing = openaiReady ? [] : ["Save your OpenAI API key in Settings"];
 
-  const billingReady = account?.billing?.status === "mock_active" || account?.billing?.status === "active";
-  const billingMissing = billingReady ? [] : ["Activate mock $5 billing"];
+  const accountBillingReady = account?.billing?.status === "mock_active" || account?.billing?.status === "active";
+  const billingReady = accountBillingReady || platformOpenAIReady;
+  const billingMissing = billingReady ? [] : ["Activate mock billing in Settings"];
 
   const projectEditingMissing = [...openaiMissing, ...githubAuthMissing, ...billingMissing];
 
@@ -47,7 +48,7 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
     billing: {
       connected: billingReady,
       mode: account?.billing?.mode ?? "mock",
-      status: account?.billing?.status ?? "inactive",
+      status: account?.billing?.status ?? (platformOpenAIReady ? "mock_active" : "inactive"),
       plan: account?.billing?.plan ?? billingPlan,
       activatedAt: account?.billing?.activatedAt,
       lastIntentId: account?.billing?.intentId,

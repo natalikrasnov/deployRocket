@@ -24,8 +24,9 @@ export function getBillingPlan() {
 }
 
 export async function createMockOpenAIBillingIntent(account: CustomerAccountState | null) {
-  if (!account?.openai?.apiKey) {
-    throw new AppError("Connect an OpenAI client token before activating billing.", {
+  const platformFallbackReady = config.allowPlatformOpenAIFallback && Boolean(config.openaiApiKey);
+  if (!account?.openai?.apiKey && !platformFallbackReady) {
+    throw new AppError("Save your OpenAI API key before activating billing.", {
       statusCode: 400,
       code: "OPENAI_CLIENT_NOT_CONNECTED",
       setupInstructions: setupHelp.openaiCustomer

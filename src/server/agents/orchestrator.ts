@@ -889,7 +889,7 @@ export class Orchestrator {
     const status = getSetupStatus();
 
     if (!status.openaiConfigured) {
-      throw new AppError("OpenAI client billing is not connected.", {
+      throw new AppError("OpenAI API key is not connected.", {
         statusCode: 401,
         code: "OPENAI_CLIENT_NOT_CONNECTED",
         setupInstructions: setupHelp.openaiCustomer

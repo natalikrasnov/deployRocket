@@ -734,6 +734,7 @@ function SettingsScreen({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const plan = setup.billing.plan;
+  const platformFallbackActive = setup.openaiConnection.source === "platform" && !setup.openaiConnection.connected;
 
   useEffect(() => {
     if (setup.openaiConnection.connected) setEditingOpenAI(false);
@@ -952,7 +953,11 @@ function SettingsScreen({
             <div className="min-w-0">
               <h3 className="font-semibold text-white">OpenAI API billing</h3>
               <p className="mt-1 text-sm text-zinc-400">
-                {setup.billing.connected ? "Mock billing active" : "Mock billing inactive"}
+                {platformFallbackActive
+                  ? "Covered by platform OpenAI key"
+                  : setup.billing.connected
+                    ? "Mock billing active"
+                    : "Mock billing inactive"}
               </p>
             </div>
           </div>
@@ -982,13 +987,13 @@ function SettingsScreen({
             <button
               type="button"
               onClick={() => run("billing", () => api.activateMockBilling())}
-              disabled={busy === "billing" || !setup.openaiConnection.connected}
+              disabled={busy === "billing" || (!setup.openaiConnection.connected && !platformFallbackActive)}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy === "billing" ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
               {setup.billing.connected ? "Refresh mock" : "Activate mock"}
             </button>
-            {setup.billing.connected ? (
+            {setup.billing.connected && !platformFallbackActive ? (
               <button
                 type="button"
                 onClick={() => run("billing", () => api.disconnectBilling())}
@@ -1345,17 +1350,46 @@ function ProjectDetails({
 
 function ErrorPanel({ project }: { project: Project }) {
   if (!project.error) return null;
+  const isLegacyVercelError = legacyVercelDeploymentError(project);
+  const isOpenAIClientError = openAIClientConnectionError(project);
+  const title = isLegacyVercelError
+    ? "GitHub Pages retry ready"
+    : isOpenAIClientError
+      ? "OpenAI API key needed"
+      : "Error";
+  const message = isLegacyVercelError
+    ? "This project failed on deployRocket's old Vercel deployment path. deployRocket now publishes generated projects with GitHub Pages, so no Vercel token is needed."
+    : isOpenAIClientError
+      ? "Your OpenAI account is separate from deployRocket. Save an API key in Settings so this browser session can call the OpenAI API."
+      : project.error.message;
+  const code = isLegacyVercelError ? "LEGACY_VERCEL_DEPLOYMENT" : project.error.code;
+  const setupInstructions = isLegacyVercelError
+    ? [
+        "Click Continue Mission to retry the GitHub save and GitHub Pages publish.",
+        "Refresh status after the retry to pick up the GitHub Pages link."
+      ]
+    : isOpenAIClientError
+      ? [
+          "Open Settings.",
+          "Save your OpenAI API key.",
+          "Activate mock billing, then Continue Mission."
+        ]
+      : project.error.setupInstructions;
+  const panelClass = isLegacyVercelError || isOpenAIClientError
+    ? "mt-4 rounded-lg border border-amber-300/35 bg-amber-300/10 p-4 text-amber-50"
+    : "mt-4 rounded-lg border border-rose-400/35 bg-rose-500/10 p-4 text-rose-50";
+
   return (
-    <div className="mt-4 rounded-lg border border-rose-400/35 bg-rose-500/10 p-4 text-rose-50">
+    <div className={panelClass}>
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 shrink-0" size={18} />
         <div className="min-w-0">
-          <h3 className="font-semibold">Error</h3>
-          <p className="mt-1 text-sm text-rose-100">{project.error.message}</p>
-          {project.error.code ? <p className="mt-2 text-xs text-rose-100/70">{project.error.code}</p> : null}
-          {project.error.setupInstructions?.length ? (
-            <ul className="mt-3 space-y-1 text-sm text-rose-50/90">
-              {project.error.setupInstructions.map((item) => (
+          <h3 className="font-semibold">{title}</h3>
+          <p className="mt-1 text-sm opacity-90">{message}</p>
+          {code ? <p className="mt-2 text-xs opacity-70">{code}</p> : null}
+          {setupInstructions?.length ? (
+            <ul className="mt-3 space-y-1 text-sm opacity-90">
+              {setupInstructions.map((item) => (
                 <li key={item}>- {item}</li>
               ))}
             </ul>
@@ -1364,6 +1398,26 @@ function ErrorPanel({ project }: { project: Project }) {
       </div>
     </div>
   );
+}
+
+function legacyVercelDeploymentError(project: Project) {
+  if (!project.error) return false;
+  return projectErrorSearchText(project).includes("vercel");
+}
+
+function openAIClientConnectionError(project: Project) {
+  return (
+    project.error?.code === "OPENAI_CLIENT_NOT_CONNECTED" ||
+    projectErrorSearchText(project).includes("openai client billing")
+  );
+}
+
+function projectErrorSearchText(project: Project) {
+  if (!project.error) return "";
+  return [project.error.code, project.error.message, project.error.details, ...(project.error.setupInstructions ?? [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function ConfirmDialog({
