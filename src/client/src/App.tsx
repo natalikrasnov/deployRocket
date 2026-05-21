@@ -481,12 +481,14 @@ function SetupBanner({
   setup: SetupStatus;
   onDisconnect: () => Promise<void>;
 }) {
+  const githubAuthReady =
+    setup.features?.githubAuth.ready ?? (setup.githubOAuthConfigured && setup.githubConnected);
   const projectEditingReady =
     setup.features?.projectEditing.ready ??
     (setup.openaiConfigured && setup.githubOAuthConfigured && setup.githubConnected);
-  const missing = setup.features?.projectEditing.missing ?? setup.missing;
+  const projectEditingMissing = setup.features?.projectEditing.missing ?? setup.missing;
 
-  if (projectEditingReady) {
+  if (githubAuthReady && projectEditingReady) {
     return (
       <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100 sm:mt-4">
         <span className="min-w-0 truncate">
@@ -510,11 +512,25 @@ function SetupBanner({
         <AlertTriangle className="mt-0.5 shrink-0 text-purple-300" size={18} />
         <div className="min-w-0 flex-1">
           <p className="font-medium">Setup required</p>
-          <p className="mt-1 text-purple-100/80">{missing.join(", ")}</p>
+          <p className="mt-1 text-purple-100/80">{projectEditingMissing.join(", ")}</p>
           <p className="mt-2 break-all text-xs text-purple-100/70">Callback: {setup.callbackUrl}</p>
         </div>
       </div>
-      {setup.githubOAuthConfigured ? (
+      {setup.githubConnected ? (
+        <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100">
+          <span className="min-w-0 truncate">
+            GitHub connected{setup.githubUser ? ` as ${setup.githubUser.login}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={onDisconnect}
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-emerald-300/25 px-2 text-xs text-emerald-100"
+          >
+            <Unplug size={14} />
+            Disconnect
+          </button>
+        </div>
+      ) : (
         <a
           href={apiUrl("/auth/github")}
           className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-purple-300 px-3 text-sm font-semibold text-zinc-950 shadow-glow-purple"
@@ -522,7 +538,7 @@ function SetupBanner({
           <Github size={16} />
           Connect GitHub
         </a>
-      ) : null}
+      )}
     </div>
   );
 }
