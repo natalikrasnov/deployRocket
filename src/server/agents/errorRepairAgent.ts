@@ -88,12 +88,22 @@ export class ErrorRepairAgent {
 function classifyRepairKind(project: Project, error: AppError): RepairKind | null {
   const text = errorText(error);
 
-  if (codexRepairCodes.has(error.code) || text.includes("unterminated string in json")) {
-    return "codex_generation";
+  if (error.code === "CODEX_PROMPT_MISSING") {
+    return "openai_structured_output";
   }
 
   if (error.code === "OPENAI_MALFORMED_RESPONSE") {
     return "openai_structured_output";
+  }
+
+  if (text.includes("unterminated string in json")) {
+    return project.status === "GENERATING_PROMPT" || project.status === "PROCESSING_INPUT"
+      ? "openai_structured_output"
+      : "codex_generation";
+  }
+
+  if (codexRepairCodes.has(error.code)) {
+    return "codex_generation";
   }
 
   if (error.code === "GITHUB_409" || isShaConflictText(text)) {

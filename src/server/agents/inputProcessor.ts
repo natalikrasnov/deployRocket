@@ -51,28 +51,38 @@ export class InputProcessor {
       });
     }
 
-    const response = await client.responses.parse(
-      {
-        model: config.openaiModel,
-        input: [
-          {
-            role: "system",
-            content:
-              "You are Agent 1, the Input Processor for a mobile-first Codex project orchestration product. Produce precise, implementation-ready requirements."
+    let response: Awaited<ReturnType<typeof client.responses.parse>>;
+
+    try {
+      response = await client.responses.parse(
+        {
+          model: config.openaiModel,
+          input: [
+            {
+              role: "system",
+              content:
+                "You are Agent 1, the Input Processor for a mobile-first Codex project orchestration product. Produce precise, implementation-ready requirements."
+            },
+            {
+              role: "user",
+              content
+            }
+          ],
+          text: {
+            format: zodTextFormat(StructuredRequirementsSchema, "structured_requirements")
           },
-          {
-            role: "user",
-            content
-          }
-        ],
-        text: {
-          format: zodTextFormat(StructuredRequirementsSchema, "structured_requirements")
+          reasoning: { effort: "low" },
+          max_output_tokens: 2500
         },
-        reasoning: { effort: "low" },
-        max_output_tokens: 2500
-      },
-      { signal }
-    );
+        { signal }
+      );
+    } catch (error) {
+      throw new AppError("OpenAI returned malformed structured requirements JSON.", {
+        code: "OPENAI_MALFORMED_RESPONSE",
+        statusCode: 502,
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
 
     if (!response.output_parsed) {
       throw new AppError("OpenAI returned no structured requirements.", {
@@ -81,7 +91,7 @@ export class InputProcessor {
       });
     }
 
-    return response.output_parsed;
+    return response.output_parsed as StructuredRequirements;
   }
 }
 

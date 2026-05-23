@@ -459,7 +459,21 @@ export class Orchestrator {
 
   private async codexGenerationStep(projectId: string, signal: AbortSignal) {
     const { input, kind, project } = await this.requireActiveContext(projectId);
-    if (!input.structuredRequirements || !input.codexPrompt) {
+    if (!input.structuredRequirements) {
+      throw new AppError("Structured requirements are missing for this run.", {
+        statusCode: 409,
+        code: "STRUCTURED_REQUIREMENTS_MISSING"
+      });
+    }
+
+    if (!input.codexPrompt) {
+      await projectStore.setStatus(
+        projectId,
+        "GENERATING_PROMPT",
+        "Generating Codex prompt",
+        "Recovering missing Codex prompt data",
+        "warning"
+      );
       throw new AppError("Codex prompt data is missing for this run.", {
         statusCode: 409,
         code: "CODEX_PROMPT_MISSING"
