@@ -40,6 +40,7 @@ export interface ProjectInputRecord {
   createdAt: string;
   structuredRequirements?: StructuredRequirements;
   codexPrompt?: CodexPromptPlan;
+  generatedProject?: GeneratedProject;
 }
 
 export interface StructuredRequirements {
