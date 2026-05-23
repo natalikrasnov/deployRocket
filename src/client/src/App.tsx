@@ -41,6 +41,10 @@ type View =
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
 
+function SpeedInsights() {
+  return null;
+}
+
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -244,7 +248,19 @@ export default function App() {
         } else {
           const nextSetup = await api.getSetup();
           if (!cancelled) setSetup(nextSetup);
-          const nextProjects = nextSetup.githubConnected ? await api.listProjects() : [];
+          const listedProjects = nextSetup.githubConnected ? await api.listProjects() : [];
+          const nextProjects = view.name === "dashboard"
+            ? await Promise.all(
+                listedProjects.map(async (project) => {
+                  if (!isRunning(project)) return project;
+                  try {
+                    return await api.runProject(project.id);
+                  } catch {
+                    return project;
+                  }
+                })
+              )
+            : listedProjects;
           if (!cancelled) setProjects(nextProjects);
         }
       } catch (error) {

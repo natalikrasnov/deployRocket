@@ -24,6 +24,7 @@ type RepairDecision =
 const maxAttemptsByKind: Record<RepairKind, number> = {
   codex_generation: 2,
   github_conflict: 3,
+  github_tree_state: 2,
   github_transient: 2,
   openai_structured_output: 2,
   generated_snapshot: 1
@@ -87,16 +88,30 @@ export class ErrorRepairAgent {
 function classifyRepairKind(project: Project, error: AppError): RepairKind | null {
   const text = errorText(error);
 
-  if (codexRepairCodes.has(error.code) || text.includes("unterminated string in json")) {
-    return "codex_generation";
+  if (error.code === "CODEX_PROMPT_MISSING") {
+    return "openai_structured_output";
   }
 
   if (error.code === "OPENAI_MALFORMED_RESPONSE") {
     return "openai_structured_output";
   }
 
+  if (text.includes("unterminated string in json")) {
+    return project.status === "GENERATING_PROMPT" || project.status === "PROCESSING_INPUT"
+      ? "openai_structured_output"
+      : "codex_generation";
+  }
+
+  if (codexRepairCodes.has(error.code)) {
+    return "codex_generation";
+  }
+
   if (error.code === "GITHUB_409" || isShaConflictText(text)) {
     return "github_conflict";
+  }
+
+  if (error.code === "GITHUB_422" && text.includes("badobjectstate")) {
+    return "github_tree_state";
   }
 
   if (/^GITHUB_(429|5\d\d)$/.test(error.code)) {
@@ -122,7 +137,9 @@ function countAttempts(project: Project, kind: RepairKind, inputId: string | und
 }
 
 function nextStatusFor(kind: RepairKind, project: Project): ProjectStatus {
-  if (kind === "github_conflict" || kind === "github_transient") return "SAVING_TO_GITHUB";
+  if (kind === "github_conflict" || kind === "github_tree_state" || kind === "github_transient") {
+    return "SAVING_TO_GITHUB";
+  }
   if (kind === "openai_structured_output") {
     return project.status === "PROCESSING_INPUT" ? "PROCESSING_INPUT" : "GENERATING_PROMPT";
   }
@@ -130,7 +147,7 @@ function nextStatusFor(kind: RepairKind, project: Project): ProjectStatus {
 }
 
 function currentStepFor(kind: RepairKind) {
-  if (kind === "github_conflict" || kind === "github_transient") {
+  if (kind === "github_conflict" || kind === "github_tree_state" || kind === "github_transient") {
     return "Auto-fix agent retrying GitHub save";
   }
   if (kind === "openai_structured_output") {
@@ -141,6 +158,7 @@ function currentStepFor(kind: RepairKind) {
 
 function actionMessageFor(kind: RepairKind) {
   if (kind === "github_conflict") return "Auto-fix agent is retrying after a GitHub write conflict";
+  if (kind === "github_tree_state") return "Auto-fix agent is retrying after stale Git tree state";
   if (kind === "github_transient") return "Auto-fix agent is retrying a temporary GitHub error";
   if (kind === "openai_structured_output") return "Auto-fix agent is retrying structured planning";
   if (kind === "generated_snapshot") return "Auto-fix agent is regenerating a damaged file snapshot";
@@ -192,7 +210,7 @@ function terminalRepairError(kind: RepairKind, error: AppError, maxAttempts: num
 }
 
 function setupInstructionsFor(kind: RepairKind) {
-  if (kind === "github_conflict" || kind === "github_transient") {
+  if (kind === "github_conflict" || kind === "github_tree_state" || kind === "github_transient") {
     return [
       "Close duplicate deployRocket tabs or stop duplicate project runs.",
       "Wait a few seconds, then click Continue Mission.",

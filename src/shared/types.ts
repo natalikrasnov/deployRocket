@@ -92,6 +92,7 @@ export interface ProjectAutoRepairAttempt {
   kind:
     | "codex_generation"
     | "github_conflict"
+    | "github_tree_state"
     | "github_transient"
     | "openai_structured_output"
     | "generated_snapshot";
