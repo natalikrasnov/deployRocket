@@ -4,8 +4,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   Circle,
-  CreditCard,
-  DollarSign,
   ExternalLink,
   Globe2,
   Github,
@@ -729,11 +727,9 @@ function SettingsScreen({
   onDisconnectGithub: () => Promise<void>;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [clientId, setClientId] = useState("");
   const [editingOpenAI, setEditingOpenAI] = useState(!setup.openaiConnection.connected);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const plan = setup.billing.plan;
   const platformFallbackActive = setup.openaiConnection.source === "platform" && !setup.openaiConnection.connected;
 
   useEffect(() => {
@@ -756,16 +752,14 @@ function SettingsScreen({
   const saveOpenAI = async () => {
     const trimmedKey = apiKey.trim();
     if (!trimmedKey) {
-      setError("OpenAI API key or client token is required.");
+      setError("OpenAI API key is required.");
       return;
     }
     await run("openai", async () => {
       const nextSetup = await api.saveOpenAIConnection({
-        apiKey: trimmedKey,
-        clientId: clientId.trim() || undefined
+        apiKey: trimmedKey
       });
       setApiKey("");
-      setClientId("");
       return nextSetup;
     });
   };
@@ -775,7 +769,7 @@ function SettingsScreen({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-white">Settings</h2>
-          <p className="mt-1 text-sm text-zinc-400">Connections, customer OpenAI token, and billing.</p>
+          <p className="mt-1 text-sm text-zinc-400">Connections and OpenAI API access.</p>
         </div>
         <ConnectionBadge
           ready={setup.features?.projectEditing.ready ?? false}
@@ -846,28 +840,47 @@ function SettingsScreen({
                 <KeyRound size={19} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-white">OpenAI client</h3>
+                <h3 className="font-semibold text-white">OpenAI API</h3>
                 <p className="mt-1 text-sm text-zinc-400">
                   {setup.openaiConnection.connected
-                    ? "Customer token stored behind the app"
+                    ? "Your API key is stored behind the app"
                     : setup.openaiConnection.source === "platform"
-                      ? "Using platform fallback"
-                      : "Token required"}
+                      ? "Using the server OPENAI_API_KEY"
+                      : "API key required"}
                 </p>
               </div>
             </div>
             <ConnectionBadge ready={setup.openaiConfigured} label={setup.openaiConfigured ? "Ready" : "Required"} />
           </div>
 
-          {setup.openaiConnection.connected && !editingOpenAI ? (
+          {platformFallbackActive && !editingOpenAI ? (
             <div className="mt-4 space-y-3">
               <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/10 p-3 text-sm text-emerald-50">
                 <div className="flex items-center gap-2">
                   <Lock size={15} />
-                  <span>Encrypted token stored</span>
+                  <span>Server token active</span>
                 </div>
                 <p className="mt-2 text-xs text-emerald-100/70">
-                  Client ID {setup.openaiConnection.clientIdConfigured ? "stored" : "not set"}
+                  Requests use the server-side OPENAI_API_KEY. The key is never sent to the browser.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingOpenAI(true)}
+                className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-200 transition hover:bg-white/5"
+              >
+                Use my own key
+              </button>
+            </div>
+          ) : setup.openaiConnection.connected && !editingOpenAI ? (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/10 p-3 text-sm text-emerald-50">
+                <div className="flex items-center gap-2">
+                  <Lock size={15} />
+                  <span>Encrypted API key stored</span>
+                </div>
+                <p className="mt-2 text-xs text-emerald-100/70">
+                  Fingerprint {setup.openaiConnection.keyFingerprint ?? "stored"}
                 </p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
@@ -897,19 +910,8 @@ function SettingsScreen({
                 void saveOpenAI();
               }}
             >
-              <label className="block text-xs font-medium uppercase tracking-[0.18em] text-zinc-500" htmlFor="openaiClientId">
-                Client ID
-              </label>
-              <input
-                id="openaiClientId"
-                value={clientId}
-                onChange={(event) => setClientId(event.target.value)}
-                className="h-10 w-full rounded-lg border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/60"
-                placeholder="Optional client identifier"
-                autoComplete="off"
-              />
               <label className="block text-xs font-medium uppercase tracking-[0.18em] text-zinc-500" htmlFor="openaiApiKey">
-                API key or token
+                API key
               </label>
               <input
                 id="openaiApiKey"
@@ -920,6 +922,9 @@ function SettingsScreen({
                 type="password"
                 autoComplete="off"
               />
+              <div className="rounded-lg border border-white/5 bg-black/15 p-3 text-xs leading-5 text-zinc-400">
+                Sign in to your OpenAI dashboard to create or copy an API key, then paste it here. deployRocket cannot pull a user's OpenAI API key from a browser sign-in.
+              </div>
               <div className="flex gap-2">
                 <button
                   type="submit"
@@ -927,9 +932,17 @@ function SettingsScreen({
                   className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-3 text-sm font-semibold text-zinc-950 shadow-glow-cyan transition hover:bg-cyan-300 disabled:opacity-60"
                 >
                   {busy === "openai" ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
-                  Save client
+                  Save API key
                 </button>
-                {setup.openaiConnection.connected ? (
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 px-3 text-sm text-zinc-300 transition hover:bg-white/5"
+                >
+                  OpenAI keys
+                </a>
+                {setup.openaiConnection.connected || platformFallbackActive ? (
                   <button
                     type="button"
                     onClick={() => setEditingOpenAI(false)}
@@ -943,69 +956,6 @@ function SettingsScreen({
           )}
         </section>
       </div>
-
-      <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4 backdrop-blur-md">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-              <CreditCard size={19} />
-            </div>
-            <div className="min-w-0">
-              <h3 className="font-semibold text-white">OpenAI API billing</h3>
-              <p className="mt-1 text-sm text-zinc-400">
-                {platformFallbackActive
-                  ? "Covered by platform OpenAI key"
-                  : setup.billing.connected
-                    ? "Mock billing active"
-                    : "Mock billing inactive"}
-              </p>
-            </div>
-          </div>
-          <ConnectionBadge ready={setup.billing.connected} label={setup.billing.connected ? "Mock active" : "Required"} />
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <MoneyTile label="Total" value={formatUsd(plan.totalCents)} tone="cyan" />
-          <MoneyTile label="OpenAI budget" value={formatUsd(plan.openaiApiBudgetCents)} tone="emerald" />
-          <MoneyTile label="Commission" value={formatUsd(plan.platformCommissionCents)} tone="purple" />
-        </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-          <div className="rounded-lg border border-white/5 bg-black/15 p-3 text-sm text-zinc-300">
-            <div className="flex items-center gap-2">
-              <DollarSign size={15} className="text-cyan-300" />
-              <span>
-                Commission recipient {setup.billing.commissionRecipientConfigured ? "configured" : "pending server env"}
-              </span>
-            </div>
-            {setup.billing.lastIntentId ? (
-              <p className="mt-2 truncate text-xs text-zinc-500">Mock intent {setup.billing.lastIntentId}</p>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
-            <button
-              type="button"
-              onClick={() => run("billing", () => api.activateMockBilling())}
-              disabled={busy === "billing" || (!setup.openaiConnection.connected && !platformFallbackActive)}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy === "billing" ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
-              {setup.billing.connected ? "Refresh mock" : "Activate mock"}
-            </button>
-            {setup.billing.connected && !platformFallbackActive ? (
-              <button
-                type="button"
-                onClick={() => run("billing", () => api.disconnectBilling())}
-                disabled={busy === "billing"}
-                className="h-10 rounded-lg border border-white/10 px-3 text-sm text-zinc-300 transition hover:bg-white/5 disabled:opacity-60"
-              >
-                Reset billing
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
@@ -1372,7 +1322,7 @@ function ErrorPanel({ project }: { project: Project }) {
       ? [
           "Open Settings.",
           "Save your OpenAI API key.",
-          "Activate mock billing, then Continue Mission."
+          "Continue Mission."
         ]
       : project.error.setupInstructions;
   const panelClass = isLegacyVercelError || isOpenAIClientError
@@ -1511,21 +1461,6 @@ function ConnectionBadge({ ready, label }: { ready: boolean; label: string }) {
   );
 }
 
-function MoneyTile({ label, value, tone }: { label: string; value: string; tone: "cyan" | "emerald" | "purple" }) {
-  const tones = {
-    cyan: "border-cyan-400/15 bg-cyan-400/10 text-cyan-100",
-    emerald: "border-emerald-400/15 bg-emerald-400/10 text-emerald-100",
-    purple: "border-purple-400/15 bg-purple-400/10 text-purple-100"
-  };
-
-  return (
-    <div className={`rounded-lg border p-3 ${tones[tone]}`}>
-      <p className="text-xs uppercase tracking-[0.18em] opacity-70">{label}</p>
-      <p className="mt-2 text-xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
 function StatusPill({ status }: { status: ProjectStatus }) {
   return (
     <span
@@ -1620,13 +1555,6 @@ function EmptyProject({ onBack }: { onBack: () => void }) {
       </button>
     </div>
   );
-}
-
-function formatUsd(cents: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD"
-  }).format(cents / 100);
 }
 
 function upsertProject(projects: Project[], project: Project | null) {

@@ -27,10 +27,10 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
   const openaiMissing = openaiReady ? [] : ["Save your OpenAI API key in Settings"];
 
   const accountBillingReady = account?.billing?.status === "mock_active" || account?.billing?.status === "active";
-  const billingReady = accountBillingReady || platformOpenAIReady;
-  const billingMissing = billingReady ? [] : ["Activate mock billing in Settings"];
+  const billingReady = accountBillingReady || openaiReady;
+  const billingMissing: string[] = [];
 
-  const projectEditingMissing = [...openaiMissing, ...githubAuthMissing, ...billingMissing];
+  const projectEditingMissing = [...openaiMissing, ...githubAuthMissing];
 
   const githubOAuthConfigured = isGithubOAuthConfigured();
   const githubConnected = Boolean(github);
@@ -42,13 +42,12 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
       connected: userOpenAIConnected,
       source: userOpenAIConnected ? "user" : platformOpenAIReady ? "platform" : "missing",
       connectedAt: account?.openai?.connectedAt,
-      keyFingerprint: account?.openai?.keyFingerprint,
-      clientIdConfigured: Boolean(account?.openai?.clientId)
+      keyFingerprint: account?.openai?.keyFingerprint
     },
     billing: {
       connected: billingReady,
       mode: account?.billing?.mode ?? "mock",
-      status: account?.billing?.status ?? (platformOpenAIReady ? "mock_active" : "inactive"),
+      status: account?.billing?.status ?? (openaiReady ? "mock_active" : "inactive"),
       plan: account?.billing?.plan ?? billingPlan,
       activatedAt: account?.billing?.activatedAt,
       lastIntentId: account?.billing?.intentId,
@@ -80,7 +79,7 @@ export function getSetupStatus(callbackUrl?: string): SetupStatus {
         missing: unique(billingMissing)
       },
       projectEditing: {
-        ready: openaiReady && githubOAuthConfigured && githubConnected && billingReady,
+        ready: openaiReady && githubOAuthConfigured && githubConnected,
         missing: unique(projectEditingMissing)
       }
     }

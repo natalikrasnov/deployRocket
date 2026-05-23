@@ -4,6 +4,7 @@ import { AppError, isAbortError, setupHelp, toReadableError } from "../lib/error
 import { createId, nowIso } from "../lib/id.js";
 import { projectStore } from "../state/projectStore.js";
 import { codexRunner } from "./codexRunner.js";
+import { errorRepairAgent } from "./errorRepairAgent.js";
 import { githubManager } from "./githubManager.js";
 import { inputProcessor } from "./inputProcessor.js";
 import { promptArchitect } from "./promptArchitect.js";
@@ -115,13 +116,15 @@ export class Orchestrator {
       });
     }
 
+    await projectStore.updateProject(projectId, (current) => {
+      current.activeInputId = inputId;
+      current.activeRunKind = kind;
+      current.error = null;
+      current.autoRepairAttempts = [];
+      delete current.pagesDispatchRequestedAt;
+    });
+
     if (config.isServerless) {
-      await projectStore.updateProject(projectId, (current) => {
-        current.activeInputId = inputId;
-        current.activeRunKind = kind;
-        current.error = null;
-        delete current.pagesDispatchRequestedAt;
-      });
       await projectStore.setStatus(
         projectId,
         "PROCESSING_INPUT",
@@ -193,22 +196,7 @@ export class Orchestrator {
           break;
       }
     } catch (error) {
-      const latest = await projectStore.getProject(projectId);
-      if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
-        if (latest?.status !== "STOPPED") {
-          await projectStore.stopProject(projectId, "Stopped active orchestration");
-        }
-      } else {
-        const readable = toReadableError(error);
-        const projectError: ProjectError = {
-          message: readable.message,
-          code: readable.code,
-          details: readable.details,
-          setupInstructions: readable.setupInstructions,
-          at: nowIso()
-        };
-        await projectStore.failProject(projectId, projectError);
-      }
+      await this.handleRunError(projectId, error, signal);
     }
 
     return this.requireProject(projectId);
@@ -247,6 +235,7 @@ export class Orchestrator {
       current.activeRunKind = input.kind;
       current.continueContext = this.buildContinueContext(project);
       current.error = null;
+      current.autoRepairAttempts = [];
       delete current.pagesDispatchRequestedAt;
     });
     await projectStore.setStatus(
@@ -408,23 +397,10 @@ export class Orchestrator {
       );
       await this.completeGithubSave(projectId);
     } catch (error) {
-      const latest = await projectStore.getProject(projectId);
-      if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
-        if (latest?.status !== "STOPPED") {
-          await projectStore.stopProject(projectId, "Stopped active orchestration");
-        }
-        return;
+      const outcome = await this.handleRunError(projectId, error, signal);
+      if (outcome === "repaired") {
+        await this.runFromCurrentStatus(projectId, githubSessionId, signal);
       }
-
-      const readable = toReadableError(error);
-      const projectError: ProjectError = {
-        message: readable.message,
-        code: readable.code,
-        details: readable.details,
-        setupInstructions: readable.setupInstructions,
-        at: nowIso()
-      };
-      await projectStore.failProject(projectId, projectError);
     }
   }
 
@@ -760,24 +736,59 @@ export class Orchestrator {
         }
       }
     } catch (error) {
-      const latest = await projectStore.getProject(projectId);
-      if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
-        if (latest?.status !== "STOPPED") {
-          await projectStore.stopProject(projectId, "Stopped active orchestration");
-        }
-        return;
+      const outcome = await this.handleRunError(projectId, error, signal);
+      if (outcome === "repaired") {
+        await this.runFromCurrentStatus(projectId, githubSessionId, signal);
       }
-
-      const readable = toReadableError(error);
-      const projectError: ProjectError = {
-        message: readable.message,
-        code: readable.code,
-        details: readable.details,
-        setupInstructions: readable.setupInstructions,
-        at: nowIso()
-      };
-      await projectStore.failProject(projectId, projectError);
     }
+  }
+
+  private async handleRunError(
+    projectId: string,
+    error: unknown,
+    signal: AbortSignal
+  ): Promise<"stopped" | "repaired" | "failed"> {
+    const latest = await projectStore.getProject(projectId);
+    if (signal.aborted || isAbortError(error) || latest?.status === "STOPPED") {
+      if (latest?.status !== "STOPPED") {
+        await projectStore.stopProject(projectId, "Stopped active orchestration");
+      }
+      return "stopped";
+    }
+
+    const readable = toReadableError(error);
+    const repair = await this.tryAutoRepair(projectId, readable);
+    if (repair.repaired) return "repaired";
+
+    const projectError: ProjectError = {
+      message: repair.error.message,
+      code: repair.error.code,
+      details: repair.error.details,
+      setupInstructions: repair.error.setupInstructions,
+      at: nowIso()
+    };
+    await projectStore.failProject(projectId, projectError);
+    return "failed";
+  }
+
+  private async tryAutoRepair(
+    projectId: string,
+    error: AppError
+  ): Promise<{ repaired: true } | { repaired: false; error: AppError }> {
+    const project = await projectStore.getProject(projectId);
+    if (!project) return { repaired: false, error };
+
+    const decision = errorRepairAgent.plan(project, error);
+    if (decision.type === "repair") {
+      await projectStore.applyAutoRepair(projectId, decision.plan);
+      return { repaired: true };
+    }
+
+    if (decision.type === "terminal") {
+      return { repaired: false, error: decision.error };
+    }
+
+    return { repaired: false, error };
   }
 
   private async renameProjectForContinuation(project: Project, githubSessionId: string) {
@@ -843,8 +854,10 @@ export class Orchestrator {
     return [
       "CODEX_API_FAILURE",
       "CODEX_EMPTY_RESPONSE",
+      "CODEX_EMPTY_FILE",
       "CODEX_INVALID_FILE_ENCODING",
-      "CODEX_MALFORMED_RESPONSE"
+      "CODEX_MALFORMED_RESPONSE",
+      "CODEX_UNSAFE_FILE_PATH"
     ].includes(code);
   }
 
@@ -893,14 +906,6 @@ export class Orchestrator {
         statusCode: 401,
         code: "OPENAI_CLIENT_NOT_CONNECTED",
         setupInstructions: setupHelp.openaiCustomer
-      });
-    }
-
-    if (!status.billing.connected) {
-      throw new AppError("Billing is not active.", {
-        statusCode: 402,
-        code: "BILLING_NOT_CONNECTED",
-        setupInstructions: setupHelp.openaiBilling
       });
     }
 

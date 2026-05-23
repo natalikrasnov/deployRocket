@@ -1,11 +1,12 @@
 import { config } from "../config.js";
-import { githubManager } from "../agents/githubManager.js";
+import { githubManager, isGitHubShaConflict } from "../agents/githubManager.js";
 import { createId, nowIso, slugify } from "../lib/id.js";
 import type {
   ActionLevel,
   JsonDatabase,
   Project,
   ProjectAction,
+  ProjectAutoRepairAttempt,
   ProjectError,
   ProjectInputRecord,
   ProjectStatus
@@ -21,9 +22,18 @@ const runningStatuses: ProjectStatus[] = [
 
 const dossierPath = "README.md";
 const stateFence = "deployrocket-state-json";
+const projectStateWriteRetries = 5;
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function projectStateConflictBackoffMs(attempt: number) {
+  return 300 + attempt * 500;
+}
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function projectIdFor(owner: string, repo: string) {
@@ -94,7 +104,8 @@ class ProjectStore {
         }
       ],
       inputs: [input],
-      lastCommittedPaths: []
+      lastCommittedPaths: [],
+      autoRepairAttempts: []
     };
 
     await this.writeProject(project, "Initialize deployRocket project dossier");
@@ -105,18 +116,34 @@ class ProjectStore {
     return this.updateProject(projectId, (project) => {
       project.inputs.push(input);
       project.error = null;
+      project.autoRepairAttempts = [];
       this.pushAction(project, "Received edit request", "info");
     });
   }
 
   async updateProject(projectId: string, updater: (project: Project) => void) {
-    const project = await this.getProject(projectId);
-    if (!project) return null;
+    let lastError: unknown;
 
-    updater(project);
-    project.updatedAt = nowIso();
-    await this.writeProject(project, "Update deployRocket project dossier");
-    return clone(project);
+    for (let attempt = 0; attempt < projectStateWriteRetries; attempt += 1) {
+      const project = await this.getProject(projectId);
+      if (!project) return null;
+
+      updater(project);
+      project.updatedAt = nowIso();
+
+      try {
+        await this.writeProject(project, "Update deployRocket project dossier");
+        return clone(project);
+      } catch (error) {
+        lastError = error;
+        if (!isGitHubShaConflict(error) || attempt === projectStateWriteRetries - 1) {
+          throw error;
+        }
+        await delay(projectStateConflictBackoffMs(attempt));
+      }
+    }
+
+    throw lastError;
   }
 
   async setStatus(
@@ -159,6 +186,30 @@ class ProjectStore {
 
     if (project) await this.writePendingDefaultReadme(project, "Update failed generated project README");
     return project;
+  }
+
+  async applyAutoRepair(
+    projectId: string,
+    repair: {
+      attempt: ProjectAutoRepairAttempt;
+      currentStep: string;
+      actionMessage: string;
+      details?: string;
+      continueContext?: string;
+    }
+  ) {
+    return this.updateProject(projectId, (project) => {
+      project.status = repair.attempt.nextStatus;
+      project.currentStep = repair.currentStep;
+      project.error = null;
+      project.autoRepairAttempts = [
+        ...(project.autoRepairAttempts ?? []),
+        repair.attempt
+      ].slice(-25);
+      if (repair.continueContext) project.continueContext = repair.continueContext;
+      delete project.pagesDispatchRequestedAt;
+      this.pushAction(project, repair.actionMessage, "warning", repair.attempt.nextStatus, repair.details);
+    });
   }
 
   async stopProject(projectId: string, message = "Stopped by user") {
@@ -233,7 +284,8 @@ class ProjectStore {
       branch: config.githubStateBranch,
       baseBranch: project.githubDefaultBranch ?? config.githubDefaultBranch,
       content: renderDossier(project),
-      message
+      message,
+      retryOnConflict: false
     });
   }
 
@@ -346,6 +398,8 @@ function renderPendingDefaultReadme(project: Project) {
 }
 
 function normalizeLegacyProject(project: Project) {
+  project.autoRepairAttempts ??= [];
+
   if ((project.status as string) === "DE" + "PLOYING") {
     project.status = "LIVE";
     project.currentStep = project.githubPagesUrl ? "Live on GitHub Pages" : "Saved to GitHub";

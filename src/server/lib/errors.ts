@@ -61,7 +61,7 @@ export const setupHelp = {
   openaiBilling: [
     "Open Settings.",
     "Save your OpenAI API key.",
-    "Activate mock billing until the live OpenAI API billing adapter is implemented."
+    "Configure a supported billing provider before enabling paid onboarding."
   ],
   githubOAuth: [
     "Create a GitHub OAuth App in GitHub Developer settings.",

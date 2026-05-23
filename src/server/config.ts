@@ -35,12 +35,17 @@ for (const dir of [paths.dataDir, paths.uploadsDir, paths.generatedDir]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+const allowPlatformOpenAIFallbackEnv = process.env.ALLOW_PLATFORM_OPENAI_FALLBACK?.trim().toLowerCase();
+
 export const config = {
   port: Number(process.env.PORT ?? 3000),
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.2",
   openaiCodexModel: process.env.OPENAI_CODEX_MODEL ?? "gpt-5.2-codex",
-  allowPlatformOpenAIFallback: process.env.ALLOW_PLATFORM_OPENAI_FALLBACK === "true",
+  allowPlatformOpenAIFallback:
+    allowPlatformOpenAIFallbackEnv === undefined
+      ? Boolean(process.env.OPENAI_API_KEY)
+      : allowPlatformOpenAIFallbackEnv === "true",
   openaiBillingApiBase: process.env.OPENAI_BILLING_API_BASE?.trim() ?? "",
   platformCommissionAccountId: process.env.PLATFORM_COMMISSION_ACCOUNT_ID?.trim() ?? "",
   githubClientId: process.env.GITHUB_CLIENT_ID?.trim() ?? "",

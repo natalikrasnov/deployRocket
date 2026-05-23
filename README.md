@@ -9,13 +9,12 @@ This is not a chat app. The chat-like composer is only used to create or edit st
 - Accepts text, browser voice transcription, and image uploads.
 - Processes raw input into structured software requirements with OpenAI.
 - Builds a Codex implementation prompt.
-- Uses the connected customer's OpenAI client token with the Responses API to generate real project files.
+- Uses either the server `OPENAI_API_KEY` or the user's saved OpenAI API key with the Responses API to generate real project files.
 - Creates or updates a GitHub repository in the connected customer GitHub account through OAuth.
 - Commits generated files to GitHub.
-- Tracks a mocked $5 OpenAI API billing plan with a $1 platform commission scaffold.
 - Stores project status, prompts, architecture, actions, and errors in each project repo on the `deployrocket-state` branch.
 
-Project generation, GitHub commits, and status persistence are real. Billing is currently a mock UI/server scaffold; missing credentials, invalid tokens, Codex failures, and GitHub errors are written as readable project errors in the GitHub dossier.
+Project generation, GitHub commits, and status persistence are real. Missing credentials, invalid tokens, Codex failures, and GitHub errors are written as readable project errors in the GitHub dossier.
 
 ## Stack
 
@@ -27,14 +26,13 @@ Project generation, GitHub commits, and status persistence are real. Billing is 
 - GitHub-owned project state with `deployrocket-state` README dossiers
 - GitHub OAuth with per-session customer authorization
 - OpenAI Responses API with a Codex coding model
-- Mock OpenAI API billing adapter scaffold
 - GitHub REST API
 
 ## Requirements
 
 - Node.js 20 or newer
 - npm
-- Customer OpenAI API key or client token with access to the configured model
+- Server `OPENAI_API_KEY` or a user OpenAI API key with access to the configured model
 - GitHub account
 - GitHub OAuth App
 
@@ -56,10 +54,9 @@ PORT=3000
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.2
 OPENAI_CODEX_MODEL=gpt-5.2-codex
-ALLOW_PLATFORM_OPENAI_FALLBACK=false
+ALLOW_PLATFORM_OPENAI_FALLBACK=true
 
-# Future live OpenAI API billing integration.
-# Billing is mocked in the app until these are wired to a real provider.
+# Optional future billing-provider integration for deployRocket itself.
 OPENAI_BILLING_API_BASE=
 PLATFORM_COMMISSION_ACCOUNT_ID=
 
@@ -125,7 +122,7 @@ GITHUB_PROJECT_TOPIC=deployrocket-project
 GITHUB_STATE_BRANCH=deployrocket-state
 
 OPENAI_API_KEY=
-ALLOW_PLATFORM_OPENAI_FALLBACK=false
+ALLOW_PLATFORM_OPENAI_FALLBACK=true
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=https://your-app.example.com/auth/github/callback
@@ -229,7 +226,7 @@ file: README.md
 optional generated snapshot files: generated/*.json
 ```
 
-The dossier README contains a stable `deployrocket-state-json` block for agents plus readable sections for current stage, completion, original prompt, architecture, action history, project URL, and latest errors. GitHub OAuth tokens and customer OpenAI client tokens are stored only in encrypted HttpOnly browser cookies, not in app storage.
+The dossier README contains a stable `deployrocket-state-json` block for agents plus readable sections for current stage, completion, original prompt, architecture, action history, project URL, and latest errors. GitHub OAuth tokens and user OpenAI API keys are stored only in encrypted HttpOnly browser cookies, not in app storage.
 
 Generated repositories also receive a managed `.github/workflows/deployrocket-pages.yml` workflow. The workflow builds the Vite app and deploys the `dist` folder to GitHub Pages whenever the default branch changes.
 
@@ -293,8 +290,7 @@ The app fails gracefully when configuration or real downstream services fail.
 
 Common setup failures:
 
-- Missing connected customer OpenAI client token
-- Missing mock billing activation
+- Missing OpenAI API key
 - Missing GitHub OAuth variables
 - GitHub not connected
 - Invalid or expired GitHub token

@@ -118,10 +118,9 @@ app.post("/api/auth/github/disconnect", async (req, res, next) => {
 app.post("/api/settings/openai", async (req, res, next) => {
   try {
     const apiKey = String(req.body.apiKey ?? req.body.openaiApiKey ?? "").trim();
-    const clientId = String(req.body.clientId ?? "").trim();
 
     if (!apiKey) {
-      throw new AppError("OpenAI API key or client token is required.", {
+      throw new AppError("OpenAI API key is required.", {
         statusCode: 400,
         code: "OPENAI_CLIENT_TOKEN_REQUIRED"
       });
@@ -131,7 +130,6 @@ app.post("/api/settings/openai", async (req, res, next) => {
       ...(accountFromRequest(req) ?? {}),
       openai: {
         apiKey,
-        clientId: clientId || undefined,
         keyFingerprint: fingerprintSecret(apiKey),
         connectedAt: nowIso()
       }

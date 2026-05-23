@@ -86,6 +86,22 @@ export interface ProjectError {
   setupInstructions?: string[];
 }
 
+export interface ProjectAutoRepairAttempt {
+  id: string;
+  at: string;
+  kind:
+    | "codex_generation"
+    | "github_conflict"
+    | "github_transient"
+    | "openai_structured_output"
+    | "generated_snapshot";
+  inputId?: string;
+  fromStatus: ProjectStatus;
+  nextStatus: ProjectStatus;
+  code?: string;
+  message: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -109,6 +125,7 @@ export interface Project {
   actions: ProjectAction[];
   inputs: ProjectInputRecord[];
   lastCommittedPaths: string[];
+  autoRepairAttempts?: ProjectAutoRepairAttempt[];
   activeInputId?: string;
   activeRunKind?: "create" | "edit";
   pagesDispatchRequestedAt?: string;
@@ -131,7 +148,6 @@ export interface OpenAIConnectionStatus {
   source: "user" | "platform" | "missing";
   connectedAt?: string;
   keyFingerprint?: string;
-  clientIdConfigured: boolean;
 }
 
 export interface BillingStatus {

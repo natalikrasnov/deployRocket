@@ -16,7 +16,6 @@ export interface GitHubAuthState {
 export interface CustomerAccountState {
   openai?: {
     apiKey: string;
-    clientId?: string;
     keyFingerprint: string;
     connectedAt: string;
   };

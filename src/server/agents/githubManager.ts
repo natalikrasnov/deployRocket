@@ -72,6 +72,8 @@ interface ApiOptions {
 }
 
 const apiBase = "https://api.github.com";
+const defaultWriteConflictRetries = 4;
+const defaultRefConflictRetries = 3;
 
 export class GitHubManager {
   getAuthorizationUrl(state: string, callbackUrl: string) {
@@ -308,6 +310,32 @@ export class GitHubManager {
     sessionId: string;
     signal?: AbortSignal;
   }) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < defaultRefConflictRetries; attempt += 1) {
+      try {
+        return await this.commitFilesOnce(params);
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableRefUpdateConflict(error) || attempt === defaultRefConflictRetries - 1) {
+          throw error;
+        }
+        await delay(conflictBackoffMs(attempt), params.signal);
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async commitFilesOnce(params: {
+    owner: string;
+    repo: string;
+    branch: string;
+    files: GeneratedFile[];
+    previousPaths: string[];
+    message: string;
+    sessionId: string;
+    signal?: AbortSignal;
+  }) {
     const github = await this.ensureAuthenticated(params.sessionId, params.signal);
     const token = github.accessToken;
     const branch = params.branch || config.githubDefaultBranch;
@@ -402,6 +430,8 @@ export class GitHubManager {
     content: string;
     message: string;
     signal?: AbortSignal;
+    retryOnConflict?: boolean;
+    maxConflictRetries?: number;
   }) {
     const github = await this.ensureAuthenticated("", params.signal);
     await this.ensureBranch(
@@ -412,24 +442,44 @@ export class GitHubManager {
       github.accessToken,
       params.signal
     );
-    const existing = await this.getTextFile(
-      params.owner,
-      params.repo,
-      params.path,
-      params.branch,
-      params.signal
-    );
-    await this.api(`/repos/${params.owner}/${params.repo}/contents/${encodePath(params.path)}`, {
-      method: "PUT",
-      token: github.accessToken,
-      body: {
-        message: params.message,
-        content: Buffer.from(params.content, "utf8").toString("base64"),
-        branch: params.branch,
-        sha: existing?.sha
-      },
-      signal: params.signal
-    });
+
+    const shouldRetry = params.retryOnConflict !== false;
+    const maxAttempts = shouldRetry
+      ? Math.max(1, params.maxConflictRetries ?? defaultWriteConflictRetries)
+      : 1;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0) await delay(conflictBackoffMs(attempt - 1), params.signal);
+
+      const existing = await this.getTextFile(
+        params.owner,
+        params.repo,
+        params.path,
+        params.branch,
+        params.signal
+      );
+
+      try {
+        await this.api(`/repos/${params.owner}/${params.repo}/contents/${encodePath(params.path)}`, {
+          method: "PUT",
+          token: github.accessToken,
+          body: {
+            message: params.message,
+            content: Buffer.from(params.content, "utf8").toString("base64"),
+            branch: params.branch,
+            sha: existing?.sha
+          },
+          signal: params.signal
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isGitHubShaConflict(error) || attempt === maxAttempts - 1) throw error;
+      }
+    }
+
+    throw lastError;
   }
 
   async readTextFiles(
@@ -581,15 +631,25 @@ export class GitHubManager {
     if (existing) return existing;
 
     const base = await this.getBranchRef(owner, repo, baseBranch || config.githubDefaultBranch, token, signal);
-    return this.api<GitRefResponse>(`/repos/${owner}/${repo}/git/refs`, {
-      method: "POST",
-      token,
-      body: {
-        ref: `refs/heads/${branch}`,
-        sha: base.object.sha
-      },
-      signal
-    });
+    try {
+      return await this.api<GitRefResponse>(`/repos/${owner}/${repo}/git/refs`, {
+        method: "POST",
+        token,
+        body: {
+          ref: `refs/heads/${branch}`,
+          sha: base.object.sha
+        },
+        signal
+      });
+    } catch (error) {
+      if (!(error instanceof AppError) || (error.statusCode !== 409 && error.statusCode !== 422)) {
+        throw error;
+      }
+      return this.api<GitRefResponse>(
+        `/repos/${owner}/${repo}/git/ref/heads/${branch}`,
+        { token, signal }
+      );
+    }
   }
 
   private async getBranchRef(
@@ -692,6 +752,34 @@ function readGithubMessage(payload: unknown, fallback: string) {
     return String((payload as { message: unknown }).message);
   }
   return fallback || "GitHub API request failed.";
+}
+
+export function isGitHubShaConflict(error: unknown) {
+  if (!(error instanceof AppError) || error.statusCode !== 409) return false;
+  const text = [error.message, error.details].filter(Boolean).join(" ").toLowerCase();
+  return (
+    text.includes("expected") ||
+    text.includes("sha") ||
+    text.includes("conflict") ||
+    text.includes("is at")
+  );
+}
+
+function isRetryableRefUpdateConflict(error: unknown) {
+  if (!(error instanceof AppError)) return false;
+  if (error.statusCode === 409) return true;
+  if (error.statusCode !== 422) return false;
+  const text = [error.message, error.details].filter(Boolean).join(" ").toLowerCase();
+  return text.includes("fast forward") || text.includes("reference") || text.includes("ref");
+}
+
+function conflictBackoffMs(attempt: number) {
+  return 250 + attempt * 450;
+}
+
+async function delay(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export const githubManager = new GitHubManager();
