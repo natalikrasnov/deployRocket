@@ -28,6 +28,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
+import { Analytics } from "@vercel/analytics/react";
 import { api, apiBaseUrl, apiUrl, ApiError, isStaticFrontendWithoutApiBase } from "./api";
 import type { ActionLevel, Project, ProjectAction, ProjectStatus, SetupStatus } from "@shared/types";
 
@@ -415,6 +416,7 @@ export default function App() {
 
       <BottomNav view={view} setView={setView} />
       <SpeedInsights />
+      <Analytics />
     </main>
   );
 }
