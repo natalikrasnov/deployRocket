@@ -516,8 +516,9 @@ export class Orchestrator {
       });
     }
 
-    await this.saveGeneratedProject(projectId, generated);
     await projectStore.updateProject(projectId, (current) => {
+      const targetInput = current.inputs.find((item) => item.id === input.id);
+      if (targetInput) targetInput.generatedProject = generated;
       current.codexRunId = runId;
       delete current.continueContext;
     });
@@ -546,7 +547,13 @@ export class Orchestrator {
       });
     }
 
-    const generated = await this.loadGeneratedProject(projectId);
+    const generated = input.generatedProject;
+    if (!generated?.files?.length) {
+      throw new AppError("Generated files are missing for GitHub save.", {
+        statusCode: 409,
+        code: "GENERATED_FILES_MISSING"
+      });
+    }
     await this.saveGeneratedFilesToGithub(
       projectId,
       generated.files,
@@ -645,6 +652,8 @@ export class Orchestrator {
       delete current.activeRunKind;
       delete current.pagesDispatchRequestedAt;
       delete current.continueContext;
+      const targetInput = current.inputs.find((item) => item.id === current.activeInputId);
+      if (targetInput) delete targetInput.generatedProject;
     });
     const project = await this.requireProject(projectId);
     if (!project.actions.some((action) => action.message === "Project saved to GitHub")) {
@@ -1026,34 +1035,6 @@ export class Orchestrator {
     };
   }
 
-  private async loadGeneratedProject(projectId: string): Promise<GeneratedProject> {
-    const project = await this.requireProject(projectId);
-    if (!project.githubOwner || !project.githubRepo) {
-      return {
-        files: [],
-        implementationSummary: "",
-        setupNotes: [],
-        warnings: []
-      };
-    }
-
-    const file = await githubManager.getTextFile(
-      project.githubOwner,
-      project.githubRepo,
-      this.generatedKey("latest"),
-      config.githubStateBranch
-    );
-    if (!file) {
-      return {
-        files: [],
-        implementationSummary: "",
-        setupNotes: [],
-        warnings: []
-      };
-    }
-    return JSON.parse(file.content) as GeneratedProject;
-  }
-
   private async loadGeneratedFiles(projectId: string): Promise<GeneratedFile[]> {
     const project = await this.requireProject(projectId);
     if (project.githubOwner && project.githubRepo && project.lastCommittedPaths.length > 0) {
@@ -1065,38 +1046,9 @@ export class Orchestrator {
       );
     }
 
-    const parsed = await this.loadGeneratedProject(projectId);
-    return parsed.files ?? [];
+    return [];
   }
 
-  private async saveGeneratedProject(projectId: string, generated: GeneratedProject) {
-    const project = await this.requireProject(projectId);
-    if (!project.githubOwner || !project.githubRepo) return;
-
-    const content = JSON.stringify(generated, null, 2);
-    await githubManager.putTextFile({
-      owner: project.githubOwner,
-      repo: project.githubRepo,
-      path: this.generatedKey("latest"),
-      branch: config.githubStateBranch,
-      baseBranch: project.githubDefaultBranch ?? config.githubDefaultBranch,
-      content,
-      message: "Update generated deployRocket file snapshot"
-    });
-    await githubManager.putTextFile({
-      owner: project.githubOwner,
-      repo: project.githubRepo,
-      path: this.generatedKey(createId("generation") + ".json"),
-      branch: config.githubStateBranch,
-      baseBranch: project.githubDefaultBranch ?? config.githubDefaultBranch,
-      content,
-      message: "Archive generated deployRocket file snapshot"
-    });
-  }
-
-  private generatedKey(name: string) {
-    return "generated/" + name + (name.endsWith(".json") ? "" : ".json");
-  }
 }
 
 function repositoryNameFor(requirements: StructuredRequirements, project: Project) {

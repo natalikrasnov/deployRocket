@@ -170,7 +170,7 @@ function inferredGitHubPagesUrl(project: Project) {
 }
 
 function projectSiteUrl(project: Project) {
-  return project.githubPagesUrl ?? (hasGeneratedSite(project) ? inferredGitHubPagesUrl(project) : null);
+  return project.githubPagesUrl ?? inferredGitHubPagesUrl(project);
 }
 
 function pagesStatusText(project: Project) {
@@ -186,7 +186,6 @@ function shouldSyncPages(project: Project) {
     !isRunning(project) &&
       project.githubOwner &&
       project.githubRepo &&
-      hasGeneratedSite(project) &&
       (!project.githubPagesUrl || project.githubPagesStatus === "publishing")
   );
 }
