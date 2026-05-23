@@ -46,6 +46,15 @@ interface GitTreeResponse {
   sha: string;
 }
 
+interface GitTreeListingResponse {
+  tree?: Array<{
+    path?: string;
+    type?: string;
+    sha?: string;
+  }>;
+  truncated?: boolean;
+}
+
 interface GitHubContentResponse {
   content?: string;
   encoding?: string;
@@ -344,9 +353,18 @@ export class GitHubManager {
       `/repos/${params.owner}/${params.repo}/git/commits/${ref.object.sha}`,
       { token, signal: params.signal }
     );
+    const existingBlobPaths = await this.listTreeBlobPaths(
+      params.owner,
+      params.repo,
+      parentCommit.tree.sha,
+      token,
+      params.signal
+    );
 
     const nextPaths = new Set(params.files.map((file) => file.path));
-    const removedPaths = params.previousPaths.filter((filePath) => !nextPaths.has(filePath));
+    const removedPaths = params.previousPaths.filter((filePath) => {
+      return !nextPaths.has(filePath) && existingBlobPaths.has(filePath);
+    });
     const treeEntries = [
       ...params.files.map((file) => ({
         path: file.path,
@@ -650,6 +668,24 @@ export class GitHubManager {
         { token, signal }
       );
     }
+  }
+
+  private async listTreeBlobPaths(
+    owner: string,
+    repo: string,
+    treeSha: string,
+    token: string,
+    signal?: AbortSignal
+  ) {
+    const response = await this.api<GitTreeListingResponse>(
+      `/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`,
+      { token, signal }
+    );
+    return new Set(
+      (response.tree ?? [])
+        .filter((entry) => entry.type === "blob" && entry.path)
+        .map((entry) => entry.path as string)
+    );
   }
 
   private async getBranchRef(
