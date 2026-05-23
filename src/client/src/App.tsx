@@ -145,6 +145,18 @@ function statusLabel(status: ProjectStatus) {
   return status.replaceAll("_", " ");
 }
 
+function projectStatusLabel(project: Project) {
+  if (project.status === "LIVE" && project.githubPagesStatus === "publishing") return "PUBLISHING";
+  return statusLabel(project.status);
+}
+
+function projectStatusTone(project: Project) {
+  if (project.status === "LIVE" && project.githubPagesStatus === "publishing") {
+    return statusTone.SAVING_TO_GITHUB;
+  }
+  return statusTone[project.status];
+}
+
 function hasGeneratedSite(project: Project) {
   return Boolean(project.githubLastCommitSha || project.lastCommittedPaths.length > 0);
 }
@@ -720,7 +732,7 @@ function Dashboard({
               <h2 className="truncate text-lg font-semibold text-white">{project.name}</h2>
               <p className="mt-1 line-clamp-2 text-sm text-zinc-400">{project.summary}</p>
             </div>
-            <StatusPill status={project.status} />
+            <StatusPill project={project} />
           </div>
           <div className="mt-4 flex min-w-0 items-center justify-between gap-3 text-xs text-zinc-500">
             <span className="min-w-0 truncate">{formatTime(project.updatedAt)}</span>
@@ -1170,6 +1182,7 @@ function ProjectDetails({
   const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
   const siteUrl = projectSiteUrl(project);
   const pagesMessage = pagesStatusText(project);
+  const siteIsPublishing = project.githubPagesStatus === "publishing";
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -1190,7 +1203,7 @@ function ProjectDetails({
               <h2 className="text-2xl font-semibold text-white">{project.name}</h2>
               <p className="mt-2 text-sm leading-6 text-zinc-400">{project.summary}</p>
             </div>
-            <StatusPill status={project.status} />
+            <StatusPill project={project} />
           </div>
         </div>
 
@@ -1252,7 +1265,7 @@ function ProjectDetails({
             {project.githubRepoUrl ? (
               <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
             ) : null}
-            {siteUrl ? (
+            {siteUrl && !siteIsPublishing ? (
               <ExternalAnchor href={siteUrl} icon={<Globe2 size={16} />} label="Visit Site" />
             ) : null}
             {pagesMessage && (!siteUrl || project.githubPagesStatus !== "built") ? (
@@ -1481,12 +1494,12 @@ function ConnectionBadge({ ready, label }: { ready: boolean; label: string }) {
   );
 }
 
-function StatusPill({ status }: { status: ProjectStatus }) {
+function StatusPill({ project }: { project: Project }) {
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-lg border px-2 py-1 text-[11px] font-semibold uppercase ${statusTone[status]}`}
+      className={`inline-flex shrink-0 items-center rounded-lg border px-2 py-1 text-[11px] font-semibold uppercase ${projectStatusTone(project)}`}
     >
-      {statusLabel(status)}
+      {projectStatusLabel(project)}
     </span>
   );
 }

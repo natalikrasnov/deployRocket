@@ -35,6 +35,8 @@ const codexRepairCodes = new Set([
   "CODEX_EMPTY_RESPONSE",
   "CODEX_INVALID_FILE_ENCODING",
   "CODEX_MALFORMED_RESPONSE",
+  "CODEX_NO_CHANGES_GENERATED",
+  "CODEX_NO_VISIBLE_CHANGES_GENERATED",
   "CODEX_UNSAFE_FILE_PATH",
   "CODEX_EMPTY_FILE"
 ]);
@@ -138,7 +140,13 @@ function countAttempts(project: Project, kind: RepairKind, inputId: string | und
 
 function nextStatusFor(kind: RepairKind, project: Project): ProjectStatus {
   if (kind === "github_conflict" || kind === "github_tree_state" || kind === "github_transient") {
-    return "SAVING_TO_GITHUB";
+    return project.status === "PROCESSING_INPUT" ||
+      project.status === "GENERATING_PROMPT" ||
+      project.status === "SENDING_TO_CODEX" ||
+      project.status === "CODEX_WORKING" ||
+      project.status === "SAVING_TO_GITHUB"
+      ? project.status
+      : "SAVING_TO_GITHUB";
   }
   if (kind === "openai_structured_output") {
     return project.status === "PROCESSING_INPUT" ? "PROCESSING_INPUT" : "GENERATING_PROMPT";
@@ -173,12 +181,17 @@ function continueContextFor(
 ) {
   if (kind !== "codex_generation" && kind !== "generated_snapshot") return undefined;
 
+  const noChanges =
+    error.code === "CODEX_NO_CHANGES_GENERATED" ||
+    error.code === "CODEX_NO_VISIBLE_CHANGES_GENERATED";
+
   return JSON.stringify(
     {
       instruction:
         "Auto-repair this deployRocket run. Preserve the user's intent, but optimize for a compact successful static Vite React TypeScript project.",
-      repairDirective:
-        "The previous generated-file step failed. Return a smaller complete file set, avoid large data arrays and oversized CSS, and keep contentBase64 valid.",
+      repairDirective: noChanges
+        ? "The previous edit did not change the visible app. Apply the requested edit in runtime app files such as src/*, public/*, index.html, CSS, or config, and return a complete changed file set."
+        : "The previous generated-file step failed. Return a smaller complete file set, avoid large data arrays and oversized CSS, and keep contentBase64 valid.",
       attemptNumber,
       project: {
         name: project.name,

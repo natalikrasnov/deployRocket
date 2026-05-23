@@ -58,6 +58,9 @@ export class PromptArchitect {
                 `Existing file paths:\n${previousManifest.length ? previousManifest.join("\n") : "(none)"}`,
                 "",
                 "Produce a prompt that tells Codex to return a complete replacement file set.",
+                mode === "edit"
+                  ? "For edit mode, the prompt must name the requested changes directly and require visible app-impacting source changes, not README-only edits."
+                  : "For create mode, the prompt must describe the full initial app.",
                 "The generated app should be production-oriented, mobile-first, accessible, and visually polished.",
                 "The generated app must build into static assets that work on GitHub Pages, including repository subpath deployments.",
                 "It must include buildable Vite React TypeScript files and avoid placeholder TODOs."

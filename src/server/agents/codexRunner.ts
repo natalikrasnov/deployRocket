@@ -94,7 +94,14 @@ export class CodexRunner {
               `Prompt plan:\n${JSON.stringify(compactPromptPlan(promptPlan), null, 2)}`,
               "",
               previousFiles.length
-                ? `Existing files to modify. Return a complete replacement set, not a patch:\n${JSON.stringify(previousFiles, null, 2)}`
+                ? [
+                    "This is an edit of an existing project.",
+                    "Implement the requested modifications in the returned files.",
+                    "Returning an identical file set is invalid.",
+                    "Changing only README/setup notes is invalid for an edit; at least one runtime app file must change visibly.",
+                    "Return a complete replacement set, not a patch:",
+                    JSON.stringify(previousFiles, null, 2)
+                  ].join("\n")
                 : "This is a new project. Return the complete file set.",
               "",
               continueContext
@@ -116,7 +123,9 @@ export class CodexRunner {
               "- For each file, set contentBase64 to base64(UTF-8 file content).",
               "- Do not wrap base64 text in markdown fences.",
               "- Do not include raw file content in any JSON field.",
-              "- If the requested app is large, generate a compact complete v1 now; future edits can add depth."
+              previousFiles.length
+                ? "- For edits, at least one app-impacting file such as src/*, public/*, index.html, package.json, vite.config.*, tailwind.config.*, postcss.config.*, or a CSS file must differ from the existing project."
+                : "- If the requested app is large, generate a compact complete v1 now; future edits can add depth.",
             ].join("\n")
           }
         ],
@@ -684,10 +693,12 @@ function compactPromptPlan(promptPlan: CodexPromptPlan) {
     summary: promptPlan.summary,
     architectureInstructions: promptPlan.architectureInstructions.slice(0, 5),
     frontendInstructions: promptPlan.frontendInstructions.slice(0, 8),
+    modificationInstructions: promptPlan.modificationInstructions.slice(0, 8),
     backendInstructions: [
       "No backend, server runtime, API routes, serverless functions, databases, secrets, or server-only package scripts. Simulate backend-like behavior in the browser only."
     ],
-    acceptanceCriteria: promptPlan.acceptanceCriteria.slice(0, 8)
+    acceptanceCriteria: promptPlan.acceptanceCriteria.slice(0, 8),
+    codexPrompt: promptPlan.codexPrompt.slice(0, 6000)
   };
 }
 

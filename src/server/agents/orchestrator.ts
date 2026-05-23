@@ -490,6 +490,32 @@ export class Orchestrator {
     );
     await this.throwIfStopped(projectId, signal);
 
+    if (kind === "edit" && previousFiles.length && sameFileSet(previousFiles, generated.files)) {
+      throw new AppError("Codex returned an edit with no file changes.", {
+        code: "CODEX_NO_CHANGES_GENERATED",
+        statusCode: 502,
+        details:
+          "The generated replacement file set was identical to the current committed files, so deployRocket did not save it as a successful edit.",
+        setupInstructions: [
+          "Click Continue Mission to let the auto-fix agent retry with a stronger edit brief.",
+          "If it repeats, use Edit Mission with a more specific visible change."
+        ]
+      });
+    }
+
+    if (kind === "edit" && previousFiles.length && sameUserFacingApp(previousFiles, generated.files)) {
+      throw new AppError("Codex returned an edit with no visible app changes.", {
+        code: "CODEX_NO_VISIBLE_CHANGES_GENERATED",
+        statusCode: 502,
+        details:
+          "The generated replacement changed only non-runtime files, so the deployed app would look the same.",
+        setupInstructions: [
+          "Click Continue Mission to let the auto-fix agent retry with a stronger visible-change brief.",
+          "If it repeats, use Edit Mission with a concrete screen, text, style, or behavior change."
+        ]
+      });
+    }
+
     await this.saveGeneratedProject(projectId, generated);
     await projectStore.updateProject(projectId, (current) => {
       current.codexRunId = runId;
@@ -1079,6 +1105,55 @@ function repositoryNameFor(requirements: StructuredRequirements, project: Projec
 
 function pagesStep(status: string | undefined) {
   return status === "built" ? "Live on GitHub Pages" : "Publishing to GitHub Pages";
+}
+
+function sameFileSet(previousFiles: GeneratedFile[], nextFiles: GeneratedFile[]) {
+  const previous = normalizeFileSet(previousFiles);
+  const next = normalizeFileSet(nextFiles);
+  if (previous.size !== next.size) return false;
+
+  for (const [path, content] of previous) {
+    if (next.get(path) !== content) return false;
+  }
+  return true;
+}
+
+function sameUserFacingApp(previousFiles: GeneratedFile[], nextFiles: GeneratedFile[]) {
+  const previous = normalizeFileSet(previousFiles);
+  const next = normalizeFileSet(nextFiles);
+  const appPaths = new Set(
+    [...previous.keys(), ...next.keys()].filter(isAppImpactingPath)
+  );
+  if (!appPaths.size) return sameFileSet(previousFiles, nextFiles);
+
+  for (const path of appPaths) {
+    if (previous.get(path) !== next.get(path)) return false;
+  }
+  return true;
+}
+
+function isAppImpactingPath(path: string) {
+  return (
+    path === "index.html" ||
+    path === "package.json" ||
+    path.startsWith("src/") ||
+    path.startsWith("public/") ||
+    /^vite\.config\.[cm]?[jt]s$/.test(path) ||
+    /^tailwind\.config\.[cm]?[jt]s$/.test(path) ||
+    /^postcss\.config\.[cm]?[jt]s$/.test(path) ||
+    path.endsWith(".css")
+  );
+}
+
+function normalizeFileSet(files: GeneratedFile[]) {
+  return new Map(
+    files
+      .map((file) => [
+        file.path.replace(/\\/g, "/").replace(/^\.\/+/, ""),
+        file.content.replace(/\r\n/g, "\n")
+      ] as const)
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
 }
 
 function isDeploymentOnlyFailure(project: Project) {
