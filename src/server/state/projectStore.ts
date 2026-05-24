@@ -399,6 +399,7 @@ function renderPendingDefaultReadme(project: Project) {
 
 function normalizeLegacyProject(project: Project) {
   project.autoRepairAttempts ??= [];
+  project.githubPagesSourceSha ??= project.githubLastCommitSha;
 
   if ((project.status as string) === "DE" + "PLOYING") {
     project.status = "LIVE";

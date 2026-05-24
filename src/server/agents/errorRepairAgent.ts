@@ -37,6 +37,7 @@ const codexRepairCodes = new Set([
   "CODEX_MALFORMED_RESPONSE",
   "CODEX_NO_CHANGES_GENERATED",
   "CODEX_NO_VISIBLE_CHANGES_GENERATED",
+  "CODEX_UNSUPPORTED_SERVICE_WORKER",
   "CODEX_UNSAFE_FILE_PATH",
   "CODEX_EMPTY_FILE"
 ]);
@@ -184,14 +185,17 @@ function continueContextFor(
   const noChanges =
     error.code === "CODEX_NO_CHANGES_GENERATED" ||
     error.code === "CODEX_NO_VISIBLE_CHANGES_GENERATED";
+  const unsupportedServiceWorker = error.code === "CODEX_UNSUPPORTED_SERVICE_WORKER";
 
   return JSON.stringify(
     {
       instruction:
         "Auto-repair this deployRocket run. Preserve the user's intent, but optimize for a compact successful static Vite React TypeScript project.",
-      repairDirective: noChanges
-        ? "The previous edit did not change the visible app. Apply the requested edit in runtime app files such as src/*, public/*, index.html, CSS, or config, and return a complete changed file set."
-        : "The previous generated-file step failed. Return a smaller complete file set, avoid large data arrays and oversized CSS, and keep contentBase64 valid.",
+      repairDirective: unsupportedServiceWorker
+        ? "The previous output included service worker, PWA offline-cache, or Workbox code. Return a complete static app without service workers or navigator.serviceWorker usage."
+        : noChanges
+          ? "The previous edit did not change the visible app. Apply the requested edit in runtime app files such as src/*, public/*, index.html, CSS, or config, and return a complete changed file set."
+          : "The previous generated-file step failed. Return a smaller complete file set, avoid large data arrays and oversized CSS, and keep contentBase64 valid.",
       attemptNumber,
       project: {
         name: project.name,

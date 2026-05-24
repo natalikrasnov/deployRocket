@@ -116,9 +116,14 @@ export interface Project {
   githubUserLogin?: string;
   githubDefaultBranch?: string;
   githubLastCommitSha?: string;
+  githubPagesSourceSha?: string;
   githubWorkflowRunId?: number;
+  githubWorkflowRunUrl?: string;
+  githubWorkflowRunStatus?: string;
+  githubWorkflowRunConclusion?: string | null;
   githubPagesUrl?: string;
   githubPagesStatus?: string;
+  githubPagesFailureDetails?: string;
   githubPagesUpdatedAt?: string;
   codexRunId?: string;
   error: ProjectError | null;

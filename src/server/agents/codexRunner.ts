@@ -48,6 +48,12 @@ const serverOnlyPathPatterns = [
   /^Dockerfile$/
 ];
 
+const serviceWorkerPathPatterns = [
+  /(^|\/)(service-worker|sw)\.[cm]?[jt]s$/,
+  /(^|\/)workbox-[^/]*\.js$/,
+  /^src\/serviceWorker(?:Registration)?\.[cm]?[jt]sx?$/
+];
+
 export class CodexRunner {
   async generateProject(
     requirements: StructuredRequirements,
@@ -80,6 +86,7 @@ export class CodexRunner {
               "Configure Vite with a GitHub Pages-safe relative asset base, such as base: \"./\".",
               "Use localStorage, in-memory state, static JSON, or client-side mock flows for persistence and backend-like behavior.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
+              "Do not generate service workers, PWA/offline cache workers, Workbox setup, or code that calls navigator.serviceWorker.",
               "Keep the project compact enough to build quickly while satisfying the request.",
               "Prefer a complete compact v1 over a sprawling multi-file app that risks truncation.",
               "For broad product requests, implement the core flows in 6 to 14 source files using local browser state or localStorage.",
@@ -182,6 +189,7 @@ export class CodexRunner {
   private normalizeGeneratedProject(generated: GeneratedProject): GeneratedProject {
     const byPath = new Map<string, string>();
     const removedServerOnlyPaths: string[] = [];
+    const removedServiceWorkerPaths: string[] = [];
 
     for (const file of generated.files) {
       const normalizedPath = file.path.replace(/\\/g, "/").replace(/^\.\/+/, "");
@@ -204,22 +212,86 @@ export class CodexRunner {
         continue;
       }
 
+      if (serviceWorkerPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
+        removedServiceWorkerPaths.push(normalizedPath);
+        continue;
+      }
+
+      if (containsUnsupportedServiceWorkerCode(normalizedPath, file.content)) {
+        throw new AppError(`Codex generated unsupported service worker code in: ${file.path}`, {
+          code: "CODEX_UNSUPPORTED_SERVICE_WORKER",
+          statusCode: 502,
+          details:
+            "Generated GitHub Pages apps must not install service workers or offline caches because they can keep serving an older app across future project URLs."
+        });
+      }
+
       byPath.set(normalizedPath, file.content);
     }
 
     ensureBuildFiles(byPath);
+    ensureServiceWorkerCleanupScript(byPath);
 
     return {
       ...generated,
-      warnings: removedServerOnlyPaths.length
+      warnings: removedServerOnlyPaths.length || removedServiceWorkerPaths.length
         ? [
             ...generated.warnings,
-            `Removed server-only files so the generated app remains GitHub Pages compatible: ${removedServerOnlyPaths.join(", ")}`
-          ]
+            removedServerOnlyPaths.length
+              ? `Removed server-only files so the generated app remains GitHub Pages compatible: ${removedServerOnlyPaths.join(", ")}`
+              : null,
+            removedServiceWorkerPaths.length
+              ? `Removed service worker files so the generated app cannot serve stale GitHub Pages caches: ${removedServiceWorkerPaths.join(", ")}`
+              : null
+          ].filter((warning): warning is string => Boolean(warning))
         : generated.warnings,
       files: [...byPath.entries()].map(([path, content]) => ({ path, content }))
     };
   }
+}
+
+function containsUnsupportedServiceWorkerCode(path: string, content: string) {
+  if (!/\.(html|[cm]?[jt]sx?)$/.test(path)) return false;
+  const withoutCleanup = stripDeployRocketServiceWorkerCleanup(content);
+  return /\bnavigator\.serviceWorker\b|\bserviceWorker\.register\b|\bregisterServiceWorker\b|["'`][^"'`]*(?:service-worker|sw)\.js/i.test(
+    withoutCleanup
+  );
+}
+
+function stripDeployRocketServiceWorkerCleanup(content: string) {
+  return content.replace(
+    /<script\s+data-deployrocket-service-worker-cleanup\b[^>]*>[\s\S]*?<\/script>/gi,
+    ""
+  );
+}
+
+function ensureServiceWorkerCleanupScript(files: Map<string, string>) {
+  const indexHtml = files.get("index.html");
+  if (!indexHtml || /data-deployrocket-service-worker-cleanup/.test(indexHtml)) return;
+
+  const script = [
+    '    <script data-deployrocket-service-worker-cleanup>',
+    '      if ("serviceWorker" in navigator) {',
+    "        navigator.serviceWorker.getRegistrations()",
+    "          .then((registrations) => {",
+    "            registrations.forEach((registration) => {",
+    "              try {",
+    "                const scopePath = new URL(registration.scope).pathname;",
+    '                if (scopePath === "/" || location.pathname.startsWith(scopePath)) {',
+    "                  registration.unregister();",
+    "                }",
+    "              } catch {",
+    "                registration.unregister();",
+    "              }",
+    "            });",
+    "          })",
+    "          .catch(() => {});",
+    "      }",
+    "    </script>"
+  ].join("\n");
+
+  const next = indexHtml.replace(/<\/head>/i, `${script}\n  </head>`);
+  files.set("index.html", next === indexHtml ? `${script}\n${indexHtml}` : next);
 }
 
 
