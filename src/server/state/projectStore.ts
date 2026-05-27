@@ -331,14 +331,9 @@ function suggestRepositoryName(input: ProjectInputRecord) {
 
   const normalized = text
     .toLowerCase()
-    .replace(/mirrow/g, "mirror")
     .replace(/beckground/g, "background")
     .replace(/difrent/g, "different")
     .replace(/desaight/g, "decide");
-
-  if (/\bmirror\b/.test(normalized) && /\bcloset\b/.test(normalized)) {
-    return normalized.includes("mood") ? "mood-mirror-closet" : "virtual-mirror-closet";
-  }
 
   const stopWords = new Set([
     "a",
@@ -361,11 +356,10 @@ function suggestRepositoryName(input: ProjectInputRecord) {
     "user",
     "with"
   ]);
-  const preferred = ["mirror", "closet", "camera", "mood", "outfit", "virtual", "background", "agent", "dashboard", "tracker"];
   const words = normalized
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length > 2 && !stopWords.has(word));
-  const selected = [...preferred.filter((word) => words.includes(word)), ...words]
+  const selected = words
     .filter((word, index, all) => all.indexOf(word) === index)
     .slice(0, 5);
 

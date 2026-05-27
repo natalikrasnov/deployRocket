@@ -19,12 +19,7 @@ interface ActiveRun {
 }
 
 function generationActionMessage(generated: GeneratedProject) {
-  const isRescueBuild = generated.warnings.some((warning) =>
-    warning.toLowerCase().includes("rescue") || warning.toLowerCase().includes("not parseable")
-  );
-  return isRescueBuild
-    ? `deployRocket generated ${generated.files.length} rescue project files`
-    : `Codex generated ${generated.files.length} project files`;
+  return `Codex generated ${generated.files.length} project files`;
 }
 
 const pagesWorkflowFile = "deployrocket-pages.yml";
@@ -557,6 +552,7 @@ export class Orchestrator {
         code: "GENERATED_FILES_MISSING"
       });
     }
+    rejectSyntheticGeneratedProject(generated);
     await this.saveGeneratedFilesToGithub(
       projectId,
       generated.files,
@@ -1003,9 +999,9 @@ export class Orchestrator {
       "CODEX_API_FAILURE",
       "CODEX_EMPTY_RESPONSE",
       "CODEX_EMPTY_FILE",
+      "CODEX_SYNTHETIC_SNAPSHOT_REJECTED",
       "CODEX_INVALID_FILE_ENCODING",
       "CODEX_MALFORMED_RESPONSE",
-      "CODEX_UNSUPPORTED_SERVICE_WORKER",
       "CODEX_UNSAFE_FILE_PATH"
     ].includes(code);
   }
@@ -1188,6 +1184,22 @@ function pagesStep(status: string | undefined) {
   if (status === "built") return "Live on GitHub Pages";
   if (status === "errored") return "GitHub Pages needs attention";
   return "Publishing to GitHub Pages";
+}
+
+function rejectSyntheticGeneratedProject(generated: GeneratedProject) {
+  const text = [
+    generated.implementationSummary,
+    ...generated.setupNotes,
+    ...generated.warnings
+  ].join(" ").toLowerCase();
+  if (!/\b(not parseable|did not return|synthetic)\b/.test(text)) return;
+
+  throw new AppError("Generated snapshot was not accepted for publishing.", {
+    code: "CODEX_SYNTHETIC_SNAPSHOT_REJECTED",
+    statusCode: 502,
+    details:
+      "deployRocket only publishes freshly generated project files returned by Codex."
+  });
 }
 
 function shouldRequestPagesDispatch(project: Project) {

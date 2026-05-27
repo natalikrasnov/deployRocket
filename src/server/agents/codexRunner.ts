@@ -48,12 +48,6 @@ const serverOnlyPathPatterns = [
   /^Dockerfile$/
 ];
 
-const serviceWorkerPathPatterns = [
-  /(^|\/)(service-worker|sw)\.[cm]?[jt]s$/,
-  /(^|\/)workbox-[^/]*\.js$/,
-  /^src\/serviceWorker(?:Registration)?\.[cm]?[jt]sx?$/
-];
-
 export class CodexRunner {
   async generateProject(
     requirements: StructuredRequirements,
@@ -86,7 +80,6 @@ export class CodexRunner {
               "Configure Vite with a GitHub Pages-safe relative asset base, such as base: \"./\".",
               "Use localStorage, in-memory state, static JSON, or client-side mock flows for persistence and backend-like behavior.",
               "Do not include secrets, API keys, local absolute paths, package-lock.json, node_modules, binary files, or TODO placeholders.",
-              "Do not generate service workers, PWA/offline cache workers, Workbox setup, or code that calls navigator.serviceWorker.",
               "Keep the project compact enough to build quickly while satisfying the request.",
               "Prefer a complete compact v1 over a sprawling multi-file app that risks truncation.",
               "For broad product requests, implement the core flows in 6 to 14 source files using local browser state or localStorage.",
@@ -160,12 +153,15 @@ export class CodexRunner {
     const parsed = response.output_parsed as EncodedGeneratedProject | null;
 
     if (!parsed) {
-      return {
-        runId: response.id,
-        generated: this.normalizeGeneratedProject(
-          createRescueGeneratedProject(requirements, promptPlan, summarizeResponseText(response))
-        )
-      };
+      throw new AppError("Codex returned no generated files.", {
+        code: "CODEX_EMPTY_RESPONSE",
+        statusCode: 502,
+        details: summarizeResponseText(response),
+        setupInstructions: [
+          "deployRocket will retry generation with a smaller repair brief.",
+          "No files were committed."
+        ]
+      });
     }
 
     return {
@@ -189,7 +185,6 @@ export class CodexRunner {
   private normalizeGeneratedProject(generated: GeneratedProject): GeneratedProject {
     const byPath = new Map<string, string>();
     const removedServerOnlyPaths: string[] = [];
-    const removedServiceWorkerPaths: string[] = [];
 
     for (const file of generated.files) {
       const normalizedPath = file.path.replace(/\\/g, "/").replace(/^\.\/+/, "");
@@ -212,539 +207,24 @@ export class CodexRunner {
         continue;
       }
 
-      if (serviceWorkerPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
-        removedServiceWorkerPaths.push(normalizedPath);
-        continue;
-      }
-
-      if (containsUnsupportedServiceWorkerCode(normalizedPath, file.content)) {
-        throw new AppError(`Codex generated unsupported service worker code in: ${file.path}`, {
-          code: "CODEX_UNSUPPORTED_SERVICE_WORKER",
-          statusCode: 502,
-          details:
-            "Generated GitHub Pages apps must not install service workers or offline caches because they can keep serving an older app across future project URLs."
-        });
-      }
-
       byPath.set(normalizedPath, file.content);
     }
 
     ensureBuildFiles(byPath);
-    ensureServiceWorkerCleanupScript(byPath);
 
     return {
       ...generated,
-      warnings: removedServerOnlyPaths.length || removedServiceWorkerPaths.length
+      warnings: removedServerOnlyPaths.length
         ? [
             ...generated.warnings,
-            removedServerOnlyPaths.length
-              ? `Removed server-only files so the generated app remains GitHub Pages compatible: ${removedServerOnlyPaths.join(", ")}`
-              : null,
-            removedServiceWorkerPaths.length
-              ? `Removed service worker files so the generated app cannot serve stale GitHub Pages caches: ${removedServiceWorkerPaths.join(", ")}`
-              : null
-          ].filter((warning): warning is string => Boolean(warning))
+            `Removed server-only files so the generated app remains GitHub Pages compatible: ${removedServerOnlyPaths.join(", ")}`
+          ]
         : generated.warnings,
       files: [...byPath.entries()].map(([path, content]) => ({ path, content }))
     };
   }
 }
 
-function containsUnsupportedServiceWorkerCode(path: string, content: string) {
-  if (!/\.(html|[cm]?[jt]sx?)$/.test(path)) return false;
-  const withoutCleanup = stripDeployRocketServiceWorkerCleanup(content);
-  return /\bnavigator\.serviceWorker\b|\bserviceWorker\.register\b|\bregisterServiceWorker\b|["'`][^"'`]*(?:service-worker|sw)\.js/i.test(
-    withoutCleanup
-  );
-}
-
-function stripDeployRocketServiceWorkerCleanup(content: string) {
-  return content.replace(
-    /<script\s+data-deployrocket-service-worker-cleanup\b[^>]*>[\s\S]*?<\/script>/gi,
-    ""
-  );
-}
-
-function ensureServiceWorkerCleanupScript(files: Map<string, string>) {
-  const indexHtml = files.get("index.html");
-  if (!indexHtml || /data-deployrocket-service-worker-cleanup/.test(indexHtml)) return;
-
-  const script = [
-    '    <script data-deployrocket-service-worker-cleanup>',
-    '      if ("serviceWorker" in navigator) {',
-    "        navigator.serviceWorker.getRegistrations()",
-    "          .then((registrations) => {",
-    "            registrations.forEach((registration) => {",
-    "              try {",
-    "                const scopePath = new URL(registration.scope).pathname;",
-    '                if (scopePath === "/" || location.pathname.startsWith(scopePath)) {',
-    "                  registration.unregister();",
-    "                }",
-    "              } catch {",
-    "                registration.unregister();",
-    "              }",
-    "            });",
-    "          })",
-    "          .catch(() => {});",
-    "      }",
-    "    </script>"
-  ].join("\n");
-
-  const next = indexHtml.replace(/<\/head>/i, `${script}\n  </head>`);
-  files.set("index.html", next === indexHtml ? `${script}\n${indexHtml}` : next);
-}
-
-
-function createRescueGeneratedProject(
-  requirements: StructuredRequirements,
-  promptPlan: CodexPromptPlan,
-  reason: string
-): GeneratedProject {
-  const appTitle = requirements.projectName || promptPlan.title || "deployRocket Project";
-  const features = requirements.coreFeatures.slice(0, 7);
-  const screens = requirements.screens.slice(0, 6);
-  const moods = buildMoodSeeds(requirements);
-
-  return {
-    implementationSummary:
-      "Codex did not return a structured generated_project payload, so deployRocket generated a compact static Vite React rescue build from the approved requirements.",
-    setupNotes: [
-      "Run npm install, then npm run dev for local development.",
-      "The app is static, serverless, and can be built with npm run build.",
-      "The Vite config uses a relative asset base so the build works from a GitHub Pages project path.",
-      "Use Edit Mission later to ask Codex for richer follow-up features."
-    ],
-    warnings: [
-      "Codex response was not parseable as generated files; deployRocket committed a compact rescue implementation instead.",
-      reason
-    ],
-    files: [
-      { path: "package.json", content: rescuePackageJson(appTitle) },
-      { path: "index.html", content: rescueIndexHtml(appTitle) },
-      { path: "vite.config.ts", content: rescueViteConfig() },
-      { path: "tsconfig.json", content: rescueTsconfig() },
-      { path: "src/main.tsx", content: rescueMainTsx() },
-      { path: "src/App.tsx", content: rescueAppTsx(appTitle, requirements.summary, features, screens, moods) },
-      { path: "src/styles.css", content: rescueStylesCss() },
-      { path: "README.md", content: rescueReadme(appTitle, requirements.summary) }
-    ]
-  };
-}
-
-function rescuePackageJson(appTitle: string) {
-  return JSON.stringify(
-    {
-      name: slugFromTitle(appTitle),
-      version: "1.0.0",
-      private: true,
-      type: "module",
-      scripts: {
-        dev: "vite --host 0.0.0.0",
-        build: "tsc && vite build",
-        preview: "vite preview --host 0.0.0.0"
-      },
-      dependencies: {
-        "@vitejs/plugin-react": "^5.0.0",
-        vite: "^7.0.0",
-        typescript: "^5.9.0",
-        react: "^19.0.0",
-        "react-dom": "^19.0.0"
-      },
-      devDependencies: {
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0"
-      }
-    },
-    null,
-    2
-  );
-}
-
-function rescueIndexHtml(appTitle: string) {
-  return [
-    "<!doctype html>",
-    '<html lang="en">',
-    "  <head>",
-    '    <meta charset="UTF-8" />',
-    '    <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
-    `    <title>${escapeHtml(appTitle)}</title>`,
-    "  </head>",
-    "  <body>",
-    '    <div id="root"></div>',
-    '    <script type="module" src="/src/main.tsx"></script>',
-    "  </body>",
-    "</html>",
-    ""
-  ].join("\n");
-}
-
-function rescueViteConfig() {
-  return `import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-  base: "./"
-});
-`;
-}
-
-function rescueTsconfig() {
-  return JSON.stringify(
-    {
-      compilerOptions: {
-        target: "ES2022",
-        useDefineForClassFields: true,
-        lib: ["DOM", "DOM.Iterable", "ES2022"],
-        allowJs: false,
-        skipLibCheck: true,
-        esModuleInterop: true,
-        allowSyntheticDefaultImports: true,
-        strict: true,
-        forceConsistentCasingInFileNames: true,
-        module: "ESNext",
-        moduleResolution: "Bundler",
-        resolveJsonModule: true,
-        isolatedModules: true,
-        noEmit: true,
-        jsx: "react-jsx"
-      },
-      include: ["src"]
-    },
-    null,
-    2
-  );
-}
-
-function rescueMainTsx() {
-  return `import React from "react";
-import { createRoot } from "react-dom/client";
-import App from "./App";
-import "./styles.css";
-
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
-`;
-}
-
-function rescueAppTsx(
-  appTitle: string,
-  summary: string,
-  features: string[],
-  screens: string[],
-  moods: Array<{ id: string; name: string; palette: string; tags: string[] }>
-) {
-  return `import { type CSSProperties, type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
-
-type ClosetItem = {
-  id: string;
-  name: string;
-  category: string;
-  image: string;
-  tags: string[];
-};
-
-const project = ${JSON.stringify({ appTitle, summary, features, screens }, null, 2)};
-const moods = ${JSON.stringify(moods, null, 2)};
-const categories = ["top", "bottom", "shoes", "outerwear", "accessory"];
-
-export default function App() {
-  const [selectedMood, setSelectedMood] = useState(moods[0]);
-  const [closet, setCloset] = useStoredCloset();
-  const [cameraStatus, setCameraStatus] = useState("Camera is off");
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
-
-  const suggestion = useMemo(() => buildSuggestion(closet, selectedMood), [closet, selectedMood]);
-
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      setCameraStatus("Live mirror is running on this device");
-    } catch (error) {
-      setCameraStatus(error instanceof Error ? error.message : "Camera permission was denied");
-    }
-  }
-
-  function addClosetFiles(files: FileList | null) {
-    if (!files?.length) return;
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const category = categories[closet.length % categories.length];
-        const item: ClosetItem = {
-          id: String(Date.now()) + Math.random().toString(16).slice(2),
-          name: file.name.replace(/\\.[^.]+$/, ""),
-          category,
-          image: String(reader.result),
-          tags: [selectedMood.id, category]
-        };
-        setCloset((current) => [item, ...current]);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  return (
-    <main className="shell" style={{ "--mood-palette": selectedMood.palette } as CSSProperties}>
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Mood based virtual mirror</p>
-          <h1>{project.appTitle}</h1>
-          <p className="summary">{project.summary}</p>
-          <div className="actions">
-            <button onClick={startCamera}>Start mirror</button>
-            <button className="secondary" onClick={() => fileRef.current?.click()}>Upload clothes</button>
-            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => addClosetFiles(event.target.files)} />
-          </div>
-        </div>
-        <div className="mirror-card">
-          <div className="video-frame">
-            <video ref={videoRef} autoPlay playsInline muted />
-            <div className="mood-overlay" />
-            <span>{cameraStatus}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="section-heading">
-          <h2>Mood backgrounds</h2>
-          <p>Choose a mood. The mirror palette and outfit agent respond instantly.</p>
-        </div>
-        <div className="mood-grid">
-          {moods.map((mood) => (
-            <button key={mood.id} className={mood.id === selectedMood.id ? "mood active" : "mood"} onClick={() => setSelectedMood(mood)}>
-              <span style={{ background: mood.palette }} />
-              {mood.name}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="grid-two">
-        <div className="panel">
-          <div className="section-heading">
-            <h2>Closet</h2>
-            <p>{closet.length ? closet.length + " uploaded items" : "Upload clothing photos to start building looks."}</p>
-          </div>
-          <div className="closet-grid">
-            {closet.map((item) => (
-              <article key={item.id} className="closet-card">
-                <img src={item.image} alt={item.name} />
-                <div>
-                  <strong>{item.name}</strong>
-                  <small>{item.category} / {item.tags.join(", ")}</small>
-                </div>
-                <button aria-label="Remove item" onClick={() => setCloset((current) => current.filter((entry) => entry.id !== item.id))}>Remove</button>
-              </article>
-            ))}
-          </div>
-        </div>
-
-        <div className="panel agent-panel">
-          <div className="section-heading">
-            <h2>Outfit agent</h2>
-            <p>{suggestion.reason}</p>
-          </div>
-          <div className="suggestion-list">
-            {suggestion.items.map((item) => (
-              <div key={item.id} className="suggestion-row">
-                <img src={item.image} alt="" />
-                <span>{item.name}</span>
-              </div>
-            ))}
-            {!suggestion.items.length ? <p className="empty">Add a few closet items and the agent will suggest a mood-matched look.</p> : null}
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="section-heading">
-          <h2>Implemented v1 scope</h2>
-          <p>This compact build is ready to expand with future deployRocket edits.</p>
-        </div>
-        <div className="feature-grid">
-          {project.features.map((feature) => <span key={feature}>{feature}</span>)}
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function useStoredCloset(): [ClosetItem[], Dispatch<SetStateAction<ClosetItem[]>>] {
-  const [items, setItems] = useState<ClosetItem[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("deployrocket.closet") ?? "[]") as ClosetItem[];
-    } catch {
-      return [];
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem("deployrocket.closet", JSON.stringify(items));
-  }, [items]);
-
-  return [items, setItems];
-}
-
-function buildSuggestion(items: ClosetItem[], mood: { id: string; name: string; tags: string[] }) {
-  const scored = [...items]
-    .map((item) => ({ item, score: item.tags.filter((tag) => mood.tags.includes(tag) || tag === mood.id).length }))
-    .sort((a, b) => b.score - a.score)
-    .map(({ item }) => item)
-    .slice(0, 4);
-
-  return {
-    items: scored,
-    reason: scored.length
-      ? "Matched to " + mood.name + " using closet tags and categories."
-      : "Waiting for closet uploads before styling this mood."
-  };
-}
-`;
-}
-
-function rescueStylesCss() {
-  return `:root {
-  color: #f8fafc;
-  background: #060811;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: #060811; }
-button { font: inherit; }
-.shell {
-  min-height: 100vh;
-  padding: 24px;
-  background:
-    radial-gradient(circle at 80% 0%, color-mix(in srgb, var(--mood-palette) 35%, transparent), transparent 36rem),
-    linear-gradient(145deg, #060811 0%, #101522 55%, #08111b 100%);
-}
-.hero {
-  display: grid;
-  gap: 24px;
-  align-items: stretch;
-  max-width: 1180px;
-  margin: 0 auto 24px;
-}
-.eyebrow { color: #67e8f9; text-transform: uppercase; letter-spacing: .16em; font-size: .75rem; font-weight: 700; }
-h1 { margin: 0; font-size: clamp(2.25rem, 8vw, 5.5rem); line-height: .95; }
-.summary { max-width: 680px; color: #cbd5e1; font-size: 1.08rem; line-height: 1.7; }
-.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
-.actions button, .closet-card button {
-  border: 0;
-  border-radius: 14px;
-  padding: 12px 16px;
-  color: #061018;
-  background: #67e8f9;
-  font-weight: 800;
-  cursor: pointer;
-}
-.actions .secondary, .closet-card button { background: rgba(255,255,255,.1); color: #f8fafc; border: 1px solid rgba(255,255,255,.14); }
-.mirror-card, .panel {
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 22px;
-  background: rgba(8, 13, 24, .74);
-  box-shadow: 0 24px 80px rgba(0,0,0,.35);
-}
-.mirror-card { padding: 14px; }
-.video-frame { position: relative; min-height: 420px; overflow: hidden; border-radius: 18px; background: #020617; display: grid; place-items: center; }
-.video-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-.mood-overlay { position: absolute; inset: 0; background: var(--mood-palette); mix-blend-mode: screen; opacity: .32; }
-.video-frame span { position: relative; z-index: 1; border-radius: 999px; background: rgba(0,0,0,.55); padding: 10px 14px; color: #e2e8f0; }
-.panel { max-width: 1180px; margin: 0 auto 24px; padding: 18px; }
-.section-heading { display: flex; gap: 12px; justify-content: space-between; align-items: end; margin-bottom: 16px; }
-h2 { margin: 0; font-size: 1.25rem; }
-.section-heading p, .empty { margin: 0; color: #94a3b8; line-height: 1.6; }
-.mood-grid, .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-.mood, .feature-grid span {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 14px;
-  background: rgba(255,255,255,.04);
-  color: #e2e8f0;
-  padding: 12px;
-}
-.mood { cursor: pointer; text-align: left; }
-.mood.active { border-color: #67e8f9; background: rgba(103,232,249,.12); }
-.mood span { width: 26px; height: 26px; border-radius: 10px; }
-.grid-two { max-width: 1180px; margin: 0 auto; display: grid; gap: 24px; }
-.grid-two .panel { margin: 0; }
-.closet-grid, .suggestion-list { display: grid; gap: 12px; }
-.closet-card, .suggestion-row { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px; border-radius: 16px; background: rgba(255,255,255,.045); padding: 10px; }
-.closet-card img, .suggestion-row img { width: 64px; height: 64px; object-fit: cover; border-radius: 12px; background: #111827; }
-.closet-card small { display: block; color: #94a3b8; margin-top: 4px; }
-.agent-panel { border-color: color-mix(in srgb, var(--mood-palette) 55%, rgba(255,255,255,.1)); }
-@media (min-width: 820px) {
-  .hero, .grid-two { grid-template-columns: 1fr 1fr; }
-  .shell { padding: 42px; }
-}
-@media (max-width: 560px) {
-  .section-heading { display: block; }
-  .closet-card { grid-template-columns: 56px 1fr; }
-  .closet-card button { grid-column: 1 / -1; }
-}
-`;
-}
-
-function rescueReadme(appTitle: string, summary: string) {
-  return [
-    "# " + appTitle,
-    "",
-    summary,
-    "",
-    "Generated by deployRocket as a compact static Vite React rescue build after Codex did not return a structured file payload.",
-    "",
-    "## Run locally",
-    "",
-    "```bash",
-    "npm install",
-    "npm run dev",
-    "```",
-    "",
-    "## Build",
-    "",
-    "```bash",
-    "npm run build",
-    "npm run preview",
-    "```",
-    "",
-    "## Notes",
-    "",
-    "deployRocket saved this static, serverless Vite build to GitHub. It does not need a backend or server runtime.",
-    "The Vite config uses a relative asset base so the production build can be hosted from a GitHub Pages project path.",
-    ""
-  ].join("\n");
-}
-
-function buildMoodSeeds(requirements: StructuredRequirements) {
-  const source = [requirements.designDirection, ...requirements.coreFeatures, ...requirements.screens].join(" ").toLowerCase();
-  const base = [
-    { id: "cozy", name: "Cozy", palette: "linear-gradient(135deg, #f97316, #7c2d12)", tags: ["cozy", "warm", "casual", "outerwear"] },
-    { id: "work", name: "Work", palette: "linear-gradient(135deg, #22d3ee, #1e3a8a)", tags: ["work", "formal", "top", "shoes"] },
-    { id: "night", name: "Night Out", palette: "linear-gradient(135deg, #a855f7, #111827)", tags: ["night", "formal", "accessory", "black"] },
-    { id: "sport", name: "Sport", palette: "linear-gradient(135deg, #84cc16, #0f766e)", tags: ["sport", "casual", "shoes"] },
-    { id: "beach", name: "Beach", palette: "linear-gradient(135deg, #38bdf8, #facc15)", tags: ["beach", "summer", "light"] }
-  ];
-  if (source.includes("rain")) base.unshift({ id: "rain", name: "Rainy Day", palette: "linear-gradient(135deg, #64748b, #0f172a)", tags: ["rain", "outerwear", "boots"] });
-  return base.slice(0, 6);
-}
-
-function slugFromTitle(title: string) {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72) || "deployrocket-project";
-}
-
-function escapeHtml(value: string) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
 
 function compactRequirements(requirements: StructuredRequirements) {
   return {
@@ -829,6 +309,22 @@ function ensureBuildFiles(files: Map<string, string>) {
     );
   }
 
+  if (!files.has("index.html")) {
+    files.set("index.html", defaultIndexHtml());
+  }
+
+  if (!files.has("src/main.tsx")) {
+    files.set("src/main.tsx", defaultMainTsx());
+  }
+
+  if (!files.has("src/App.tsx")) {
+    files.set("src/App.tsx", defaultAppTsx());
+  }
+
+  if (!files.has("src/styles.css")) {
+    files.set("src/styles.css", "");
+  }
+
   ensureGithubPagesViteConfig(files);
 
   if (!files.has("tsconfig.json")) {
@@ -892,6 +388,43 @@ export default defineConfig({
   plugins: [react()],
   base: "./"
 });
+`;
+}
+
+function defaultIndexHtml() {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>deployRocket Project</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+`;
+}
+
+function defaultMainTsx() {
+  return `import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./styles.css";
+
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+`;
+}
+
+function defaultAppTsx() {
+  return `export default function App() {
+  return null;
+}
 `;
 }
 

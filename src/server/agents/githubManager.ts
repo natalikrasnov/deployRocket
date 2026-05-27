@@ -219,7 +219,7 @@ export class GitHubManager {
 
   async createDeployRocketRepository(nameSuggestion: string, description: string, signal?: AbortSignal) {
     const github = await this.ensureAuthenticated("", signal);
-    const baseName = slugify(nameSuggestion, "deployrocket-project");
+    const baseName = safeProjectRepositoryBaseName(nameSuggestion, github.user.login, "deployrocket-project");
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const name = attempt === 0 ? baseName : `${baseName}-${attempt + 1}`;
@@ -262,7 +262,11 @@ export class GitHubManager {
   ) {
     if (!project.githubOwner || !project.githubRepo) return null;
     const github = await this.ensureAuthenticated(sessionId, signal);
-    const baseName = slugify(nameSuggestion || project.name, project.githubRepo);
+    const baseName = safeProjectRepositoryBaseName(
+      nameSuggestion || project.name,
+      github.user.login,
+      project.githubRepo
+    );
 
     if (baseName === project.githubRepo) {
       return {
@@ -871,6 +875,12 @@ function normalizeWorkflowRun(run: GitHubWorkflowRunResponse) {
     runNumber: run.run_number,
     displayTitle: run.display_title
   };
+}
+
+function safeProjectRepositoryBaseName(input: string, owner: string, fallback: string) {
+  const slug = slugify(input, fallback);
+  const rootPagesRepo = `${owner.toLowerCase()}.github.io`;
+  return slug.toLowerCase() === rootPagesRepo ? `${slug}-project` : slug;
 }
 
 function defaultGitHubPagesUrl(owner: string, repo: string) {

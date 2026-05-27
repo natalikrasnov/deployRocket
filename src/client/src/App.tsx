@@ -41,10 +41,6 @@ type View =
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
 
-function SpeedInsights() {
-  return null;
-}
-
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
