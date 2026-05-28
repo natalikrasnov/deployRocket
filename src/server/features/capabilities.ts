@@ -15,11 +15,22 @@ function githubOAuthMissing() {
   return missing;
 }
 
+function hasGithubScope(scopeHeader: string | undefined, requiredScope: string) {
+  return (scopeHeader ?? "")
+    .split(/[,\s]+/)
+    .map((scope) => scope.trim())
+    .filter(Boolean)
+    .includes(requiredScope);
+}
+
 export function getSetupStatus(callbackUrl?: string): SetupStatus {
   const github = getGithubAuthFromContext();
   const account = getCustomerAccountFromContext();
   const githubAuthMissing = githubOAuthMissing();
   if (!github) githubAuthMissing.push("Connect your GitHub account");
+  if (github && !hasGithubScope(github.scope, "workflow")) {
+    githubAuthMissing.push("Reconnect GitHub with workflow permission");
+  }
 
   const userOpenAIConnected = Boolean(account?.openai?.apiKey);
   const platformOpenAIReady = config.allowPlatformOpenAIFallback && Boolean(config.openaiApiKey);

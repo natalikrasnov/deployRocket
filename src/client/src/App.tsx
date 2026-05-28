@@ -41,10 +41,6 @@ type View =
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
 
-function SpeedInsights() {
-  return null;
-}
-
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -146,11 +142,15 @@ function statusLabel(status: ProjectStatus) {
 }
 
 function projectStatusLabel(project: Project) {
+  if (project.status === "LIVE" && project.githubPagesStatus === "errored") return "PAGES ERROR";
   if (project.status === "LIVE" && project.githubPagesStatus === "publishing") return "PUBLISHING";
   return statusLabel(project.status);
 }
 
 function projectStatusTone(project: Project) {
+  if (project.status === "LIVE" && project.githubPagesStatus === "errored") {
+    return statusTone.FAILED;
+  }
   if (project.status === "LIVE" && project.githubPagesStatus === "publishing") {
     return statusTone.SAVING_TO_GITHUB;
   }
@@ -176,7 +176,7 @@ function projectSiteUrl(project: Project) {
 function pagesStatusText(project: Project) {
   if (!hasGeneratedSite(project) && project.status !== "SAVING_TO_GITHUB") return null;
   if (project.githubPagesStatus === "built") return "GitHub Pages is live.";
-  if (project.githubPagesStatus === "errored") return "GitHub Pages needs attention.";
+  if (project.githubPagesStatus === "errored") return "GitHub Pages workflow failed.";
   if (project.status === "SAVING_TO_GITHUB" || project.githubPagesStatus === "publishing") return "GitHub Pages is publishing.";
   return "GitHub Pages is being prepared.";
 }
@@ -1181,7 +1181,7 @@ function ProjectDetails({
   const timelineActions = useMemo(() => groupTimelineActions(project.actions), [project.actions]);
   const siteUrl = projectSiteUrl(project);
   const pagesMessage = pagesStatusText(project);
-  const siteIsPublishing = project.githubPagesStatus === "publishing";
+  const siteIsReady = project.githubPagesStatus === "built";
 
   const handleContinue = async () => {
     setContinueBusy(true);
@@ -1264,17 +1264,27 @@ function ProjectDetails({
             {project.githubRepoUrl ? (
               <ExternalAnchor href={project.githubRepoUrl} icon={<Github size={16} />} label="Repository" />
             ) : null}
-            {siteUrl && !siteIsPublishing ? (
+            {siteUrl && siteIsReady ? (
               <ExternalAnchor href={siteUrl} icon={<Globe2 size={16} />} label="Visit Site" />
             ) : null}
-            {pagesMessage && (!siteUrl || project.githubPagesStatus !== "built") ? (
+            {project.githubWorkflowRunUrl && !siteIsReady ? (
+              <ExternalAnchor href={project.githubWorkflowRunUrl} icon={<Activity size={16} />} label="Pages Workflow" />
+            ) : null}
+            {pagesMessage && !siteIsReady ? (
               <div className="flex items-start gap-2 rounded-lg border border-cyan-400/10 bg-cyan-400/[0.04] px-3 py-2 text-xs leading-5 text-cyan-100/80">
                 {project.githubPagesStatus === "errored" ? (
                   <AlertTriangle className="mt-0.5 shrink-0 text-amber-200" size={14} />
                 ) : (
                   <Loader2 className="mt-0.5 shrink-0 animate-spin text-cyan-300" size={14} />
                 )}
-                <span>{pagesMessage}</span>
+                <span>
+                  {pagesMessage}
+                  {project.githubPagesFailureDetails ? (
+                    <span className="mt-1 block whitespace-pre-wrap break-words text-cyan-100/60">
+                      {project.githubPagesFailureDetails}
+                    </span>
+                  ) : null}
+                </span>
               </div>
             ) : null}
             {!project.githubRepoUrl && !siteUrl ? (

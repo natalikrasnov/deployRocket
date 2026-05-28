@@ -62,6 +62,12 @@ interface GitHubContentResponse {
   type: string;
 }
 
+interface GitHubContentPutResponse {
+  commit?: {
+    sha?: string;
+  };
+}
+
 interface GitHubPagesResponse {
   html_url?: string;
   status?: string;
@@ -69,6 +75,30 @@ interface GitHubPagesResponse {
     branch?: string;
     path?: string;
   };
+}
+
+interface GitHubWorkflowRunResponse {
+  id: number;
+  head_sha?: string;
+  status?: string | null;
+  conclusion?: string | null;
+  html_url?: string;
+  event?: string;
+  created_at?: string;
+  updated_at?: string;
+  run_started_at?: string | null;
+  run_number?: number;
+  display_title?: string;
+}
+
+interface GitHubWorkflowRunsResponse {
+  workflow_runs?: GitHubWorkflowRunResponse[];
+}
+
+interface GitHubWorkflowDispatchResponse {
+  workflow_run_id?: number;
+  run_url?: string;
+  html_url?: string;
 }
 
 interface ApiOptions {
@@ -97,7 +127,7 @@ export class GitHubManager {
     const url = new URL("https://github.com/login/oauth/authorize");
     url.searchParams.set("client_id", config.githubClientId);
     url.searchParams.set("redirect_uri", callbackUrl);
-    url.searchParams.set("scope", "repo user:email");
+    url.searchParams.set("scope", "repo workflow user:email");
     url.searchParams.set("state", state);
     return url.toString();
   }
@@ -189,7 +219,7 @@ export class GitHubManager {
 
   async createDeployRocketRepository(nameSuggestion: string, description: string, signal?: AbortSignal) {
     const github = await this.ensureAuthenticated("", signal);
-    const baseName = slugify(nameSuggestion, "deployrocket-project");
+    const baseName = safeProjectRepositoryBaseName(nameSuggestion, github.user.login, "deployrocket-project");
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const name = attempt === 0 ? baseName : `${baseName}-${attempt + 1}`;
@@ -232,7 +262,11 @@ export class GitHubManager {
   ) {
     if (!project.githubOwner || !project.githubRepo) return null;
     const github = await this.ensureAuthenticated(sessionId, signal);
-    const baseName = slugify(nameSuggestion || project.name, project.githubRepo);
+    const baseName = safeProjectRepositoryBaseName(
+      nameSuggestion || project.name,
+      github.user.login,
+      project.githubRepo
+    );
 
     if (baseName === project.githubRepo) {
       return {
@@ -479,18 +513,21 @@ export class GitHubManager {
       );
 
       try {
-        await this.api(`/repos/${params.owner}/${params.repo}/contents/${encodePath(params.path)}`, {
-          method: "PUT",
-          token: github.accessToken,
-          body: {
-            message: params.message,
-            content: Buffer.from(params.content, "utf8").toString("base64"),
-            branch: params.branch,
-            sha: existing?.sha
-          },
-          signal: params.signal
-        });
-        return;
+        const response = await this.api<GitHubContentPutResponse>(
+          `/repos/${params.owner}/${params.repo}/contents/${encodePath(params.path)}`,
+          {
+            method: "PUT",
+            token: github.accessToken,
+            body: {
+              message: params.message,
+              content: Buffer.from(params.content, "utf8").toString("base64"),
+              branch: params.branch,
+              sha: existing?.sha
+            },
+            signal: params.signal
+          }
+        );
+        return response.commit?.sha;
       } catch (error) {
         lastError = error;
         if (!isGitHubShaConflict(error) || attempt === maxAttempts - 1) throw error;
@@ -513,6 +550,63 @@ export class GitHubManager {
       if (result) files.push({ path: filePath, content: result.content });
     }
     return files;
+  }
+
+  async listWorkflowRuns(params: {
+    owner: string;
+    repo: string;
+    workflowFile: string;
+    branch: string;
+    sessionId: string;
+    perPage?: number;
+    signal?: AbortSignal;
+  }) {
+    const github = await this.ensureAuthenticated(params.sessionId, params.signal);
+    const workflowId = encodeURIComponent(params.workflowFile);
+    const query = new URLSearchParams({
+      branch: params.branch,
+      per_page: String(params.perPage ?? 5),
+      exclude_pull_requests: "true"
+    });
+    const result = await this.api<GitHubWorkflowRunsResponse | null>(
+      `/repos/${params.owner}/${params.repo}/actions/workflows/${workflowId}/runs?${query.toString()}`,
+      {
+        token: github.accessToken,
+        signal: params.signal,
+        allow404: true
+      }
+    );
+    return (result?.workflow_runs ?? []).map(normalizeWorkflowRun);
+  }
+
+  async dispatchWorkflow(params: {
+    owner: string;
+    repo: string;
+    workflowFile: string;
+    branch: string;
+    sessionId: string;
+    signal?: AbortSignal;
+  }) {
+    const github = await this.ensureAuthenticated(params.sessionId, params.signal);
+    try {
+      const response = await this.api<GitHubWorkflowDispatchResponse | null>(
+        `/repos/${params.owner}/${params.repo}/actions/workflows/${encodeURIComponent(params.workflowFile)}/dispatches`,
+        {
+          method: "POST",
+          token: github.accessToken,
+          body: { ref: params.branch },
+          signal: params.signal
+        }
+      );
+      return {
+        workflowRunId: response?.workflow_run_id,
+        runUrl: response?.run_url,
+        htmlUrl: response?.html_url
+      };
+    } catch (error) {
+      if (error instanceof AppError && error.statusCode === 404) return null;
+      throw error;
+    }
   }
 
   async getGitHubPages(owner: string, repo: string, sessionId: string, signal?: AbortSignal) {
@@ -765,6 +859,28 @@ function normalizeUrl(value: string | undefined) {
   const trimmed = value?.trim();
   if (!trimmed) return null;
   return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+}
+
+function normalizeWorkflowRun(run: GitHubWorkflowRunResponse) {
+  return {
+    id: run.id,
+    headSha: run.head_sha ?? "",
+    status: run.status ?? "unknown",
+    conclusion: run.conclusion ?? null,
+    htmlUrl: run.html_url,
+    event: run.event,
+    createdAt: run.created_at,
+    updatedAt: run.updated_at,
+    runStartedAt: run.run_started_at ?? null,
+    runNumber: run.run_number,
+    displayTitle: run.display_title
+  };
+}
+
+function safeProjectRepositoryBaseName(input: string, owner: string, fallback: string) {
+  const slug = slugify(input, fallback);
+  const rootPagesRepo = `${owner.toLowerCase()}.github.io`;
+  return slug.toLowerCase() === rootPagesRepo ? `${slug}-project` : slug;
 }
 
 function defaultGitHubPagesUrl(owner: string, repo: string) {

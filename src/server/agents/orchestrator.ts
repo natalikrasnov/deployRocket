@@ -19,15 +19,12 @@ interface ActiveRun {
 }
 
 function generationActionMessage(generated: GeneratedProject) {
-  const isRescueBuild = generated.warnings.some((warning) =>
-    warning.toLowerCase().includes("rescue") || warning.toLowerCase().includes("not parseable")
-  );
-  return isRescueBuild
-    ? `deployRocket generated ${generated.files.length} rescue project files`
-    : `Codex generated ${generated.files.length} project files`;
+  return `Codex generated ${generated.files.length} project files`;
 }
 
-const pagesWorkflowPath = ".github/workflows/deployrocket-pages.yml";
+const pagesWorkflowFile = "deployrocket-pages.yml";
+const pagesWorkflowPath = `.github/workflows/${pagesWorkflowFile}`;
+const pagesDispatchCooldownMs = 2 * 60 * 1000;
 
 function withGitHubPagesWorkflow(files: GeneratedFile[], branch: string) {
   return [
@@ -285,7 +282,8 @@ export class Orchestrator {
     }
 
     return this.syncGitHubPagesDeployment(project.id, githubSessionId, controller.signal, {
-      ensureWorkflow: Boolean(project.githubLastCommitSha || project.lastCommittedPaths.length > 0)
+      ensureWorkflow: Boolean(project.githubLastCommitSha || project.lastCommittedPaths.length > 0),
+      requestDeployment: true
     });
   }
 
@@ -554,6 +552,7 @@ export class Orchestrator {
         code: "GENERATED_FILES_MISSING"
       });
     }
+    rejectSyntheticGeneratedProject(generated);
     await this.saveGeneratedFilesToGithub(
       projectId,
       generated.files,
@@ -624,10 +623,16 @@ export class Orchestrator {
 
     await projectStore.updateProject(projectId, (current) => {
       current.githubLastCommitSha = commitSha;
+      current.githubPagesSourceSha = commitSha;
       current.lastCommittedPaths = files.map((file) => file.path);
       if (current.githubPagesUrl) current.githubPagesStatus = "publishing";
     });
     await projectStore.addAction(projectId, "Files committed to GitHub", "success", commitSha);
+    await this.syncGitHubPagesDeployment(projectId, githubSessionId, signal, {
+      ensureWorkflow: true,
+      configureIfMissing: true,
+      requestDeployment: true
+    });
   }
 
   private async clearServerlessRun(projectId: string) {
@@ -643,16 +648,14 @@ export class Orchestrator {
     await projectStore.updateProject(projectId, (current) => {
       current.status = "LIVE";
       current.currentStep = current.githubPagesUrl
-        ? current.githubPagesStatus === "built"
-          ? "Live on GitHub Pages"
-          : "Publishing to GitHub Pages"
+        ? pagesStep(current.githubPagesStatus)
         : "Saved to GitHub";
       current.error = null;
+      const targetInputId = current.activeInputId;
       delete current.activeInputId;
       delete current.activeRunKind;
-      delete current.pagesDispatchRequestedAt;
       delete current.continueContext;
-      const targetInput = current.inputs.find((item) => item.id === current.activeInputId);
+      const targetInput = current.inputs.find((item) => item.id === targetInputId);
       if (targetInput) delete targetInput.generatedProject;
     });
     const project = await this.requireProject(projectId);
@@ -669,7 +672,7 @@ export class Orchestrator {
     projectId: string,
     githubSessionId: string,
     signal: AbortSignal,
-    options: { ensureWorkflow: boolean; configureIfMissing?: boolean }
+    options: { ensureWorkflow: boolean; configureIfMissing?: boolean; requestDeployment?: boolean }
   ) {
     const project = await this.requireProject(projectId);
     if (!project.githubOwner || !project.githubRepo) return project;
@@ -692,18 +695,77 @@ export class Orchestrator {
 
     if (!pages) return project;
 
-    const workflowChanged = options.ensureWorkflow
+    const workflowUpdate = options.ensureWorkflow
       ? await this.ensureGitHubPagesWorkflowFile(project, branch, signal)
-      : false;
+      : { changed: false };
+    let deploymentSha = workflowUpdate.commitSha ?? project.githubPagesSourceSha ?? project.githubLastCommitSha;
+    let workflowRun = options.ensureWorkflow
+      ? await this.latestGitHubPagesWorkflowRun(project, branch, githubSessionId, signal)
+      : null;
+
+    const needsDeploymentRun = Boolean(
+      options.requestDeployment &&
+        deploymentSha &&
+        (workflowUpdate.changed || !workflowRun || workflowRun.headSha !== deploymentSha)
+    );
+    let dispatchRequested = false;
+    if (needsDeploymentRun && shouldRequestPagesDispatch(project)) {
+      const dispatch = await githubManager.dispatchWorkflow({
+        owner: project.githubOwner,
+        repo: project.githubRepo,
+        workflowFile: pagesWorkflowFile,
+        branch,
+        sessionId: githubSessionId,
+        signal
+      });
+      dispatchRequested = Boolean(dispatch);
+      if (dispatch?.workflowRunId) {
+        workflowRun = {
+          id: dispatch.workflowRunId,
+          headSha: deploymentSha ?? "",
+          status: "queued",
+          conclusion: null,
+          htmlUrl: dispatch.htmlUrl,
+          event: "workflow_dispatch",
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+          runStartedAt: null,
+          runNumber: undefined,
+          displayTitle: undefined
+        };
+      }
+    }
 
     const hadPagesUrl = Boolean(project.githubPagesUrl);
-    const nextStatus = workflowChanged || (options.ensureWorkflow && pages.status !== "built")
-      ? "publishing"
-      : pages.status;
+    if (!deploymentSha && project.githubLastCommitSha) deploymentSha = project.githubLastCommitSha;
+    const nextStatus = resolvePagesStatus({
+      pagesStatus: pages.status,
+      workflowRun,
+      deploymentSha,
+      deploymentRequested: dispatchRequested || needsDeploymentRun
+    });
+    const pagesFailureDetails = workflowFailureDetails(workflowRun, deploymentSha);
     await projectStore.updateProject(projectId, (current) => {
       current.githubPagesUrl = pages.url;
       current.githubPagesStatus = nextStatus;
       current.githubPagesUpdatedAt = nowIso();
+      if (deploymentSha) current.githubPagesSourceSha = deploymentSha;
+      if (workflowRun) {
+        current.githubWorkflowRunId = workflowRun.id;
+        current.githubWorkflowRunUrl = workflowRun.htmlUrl;
+        current.githubWorkflowRunStatus = workflowRun.status;
+        current.githubWorkflowRunConclusion = workflowRun.conclusion;
+      }
+      if (pagesFailureDetails) {
+        current.githubPagesFailureDetails = pagesFailureDetails;
+      } else {
+        delete current.githubPagesFailureDetails;
+      }
+      if (dispatchRequested) {
+        current.pagesDispatchRequestedAt = nowIso();
+      } else if (nextStatus === "built" || nextStatus === "errored") {
+        delete current.pagesDispatchRequestedAt;
+      }
 
       if (current.status === "LIVE") {
         current.currentStep = pagesStep(nextStatus);
@@ -713,7 +775,6 @@ export class Orchestrator {
         current.error = null;
         delete current.activeInputId;
         delete current.activeRunKind;
-        delete current.pagesDispatchRequestedAt;
         delete current.continueContext;
       }
     });
@@ -722,11 +783,27 @@ export class Orchestrator {
     if (!hadPagesUrl && latest.githubPagesUrl) {
       await projectStore.addAction(projectId, "GitHub Pages link ready", "success", latest.githubPagesUrl);
     }
+    if (dispatchRequested) {
+      await projectStore.addAction(
+        projectId,
+        "Requested GitHub Pages workflow run",
+        "info",
+        latest.githubWorkflowRunUrl ?? pagesWorkflowActionsUrl(latest)
+      );
+    }
+    if (pagesFailureDetails && !hasRecordedPagesFailure(latest, pagesFailureDetails)) {
+      await projectStore.addAction(
+        projectId,
+        "GitHub Pages workflow failed",
+        "error",
+        pagesFailureDetails
+      );
+    }
     return this.requireProject(projectId);
   }
 
   private async ensureGitHubPagesWorkflowFile(project: Project, branch: string, signal: AbortSignal) {
-    if (!project.githubOwner || !project.githubRepo) return false;
+    if (!project.githubOwner || !project.githubRepo) return { changed: false };
 
     const content = renderGitHubPagesWorkflow(branch);
     const existing = await githubManager.getTextFile(
@@ -736,9 +813,9 @@ export class Orchestrator {
       branch,
       signal
     );
-    if (existing?.content === content) return false;
+    if (existing?.content === content) return { changed: false };
 
-    await githubManager.putTextFile({
+    const commitSha = await githubManager.putTextFile({
       owner: project.githubOwner,
       repo: project.githubRepo,
       path: pagesWorkflowPath,
@@ -748,7 +825,25 @@ export class Orchestrator {
       message: "Configure deployRocket GitHub Pages workflow",
       signal
     });
-    return true;
+    return { changed: true, commitSha };
+  }
+
+  private async latestGitHubPagesWorkflowRun(
+    project: Project,
+    branch: string,
+    githubSessionId: string,
+    signal: AbortSignal
+  ) {
+    if (!project.githubOwner || !project.githubRepo) return null;
+    const runs = await githubManager.listWorkflowRuns({
+      owner: project.githubOwner,
+      repo: project.githubRepo,
+      workflowFile: pagesWorkflowFile,
+      branch,
+      sessionId: githubSessionId,
+      signal
+    });
+    return runs[0] ?? null;
   }
 
   private async runFromCurrentStatus(projectId: string, githubSessionId: string, signal: AbortSignal) {
@@ -904,6 +999,7 @@ export class Orchestrator {
       "CODEX_API_FAILURE",
       "CODEX_EMPTY_RESPONSE",
       "CODEX_EMPTY_FILE",
+      "CODEX_SYNTHETIC_SNAPSHOT_REJECTED",
       "CODEX_INVALID_FILE_ENCODING",
       "CODEX_MALFORMED_RESPONSE",
       "CODEX_UNSAFE_FILE_PATH"
@@ -974,6 +1070,14 @@ export class Orchestrator {
       });
     }
 
+    if (status.features?.githubAuth.missing.includes("Reconnect GitHub with workflow permission")) {
+      throw new AppError("GitHub workflow permission is missing.", {
+        statusCode: 401,
+        code: "GITHUB_WORKFLOW_SCOPE_MISSING",
+        setupInstructions: setupHelp.githubWorkflowScope
+      });
+    }
+
     const github = await githubManager.ensureAuthenticated(githubSessionId, signal);
     const project = await this.requireProject(projectId);
 
@@ -1035,6 +1139,27 @@ export class Orchestrator {
     };
   }
 
+  private async saveGeneratedProject(projectId: string, generated: GeneratedProject) {
+    const project = await this.requireProject(projectId);
+    const inputId = project.activeInputId ?? project.inputs.at(-1)?.id;
+    await projectStore.updateProject(projectId, (current) => {
+      const targetInput = current.inputs.find((item) => item.id === inputId);
+      if (targetInput) targetInput.generatedProject = generated;
+    });
+  }
+
+  private async loadGeneratedProject(projectId: string): Promise<GeneratedProject> {
+    const project = await this.requireProject(projectId);
+    const inputId = project.activeInputId ?? project.inputs.at(-1)?.id;
+    const generatedProject = project.inputs.find((item) => item.id === inputId)?.generatedProject;
+    return generatedProject ?? {
+      files: [],
+      implementationSummary: "",
+      setupNotes: [],
+      warnings: []
+    };
+  }
+
   private async loadGeneratedFiles(projectId: string): Promise<GeneratedFile[]> {
     const project = await this.requireProject(projectId);
     if (project.githubOwner && project.githubRepo && project.lastCommittedPaths.length > 0) {
@@ -1056,7 +1181,79 @@ function repositoryNameFor(requirements: StructuredRequirements, project: Projec
 }
 
 function pagesStep(status: string | undefined) {
-  return status === "built" ? "Live on GitHub Pages" : "Publishing to GitHub Pages";
+  if (status === "built") return "Live on GitHub Pages";
+  if (status === "errored") return "GitHub Pages needs attention";
+  return "Publishing to GitHub Pages";
+}
+
+function rejectSyntheticGeneratedProject(generated: GeneratedProject) {
+  const text = [
+    generated.implementationSummary,
+    ...generated.setupNotes,
+    ...generated.warnings
+  ].join(" ").toLowerCase();
+  if (!/\b(not parseable|did not return|synthetic)\b/.test(text)) return;
+
+  throw new AppError("Generated snapshot was not accepted for publishing.", {
+    code: "CODEX_SYNTHETIC_SNAPSHOT_REJECTED",
+    statusCode: 502,
+    details:
+      "deployRocket only publishes freshly generated project files returned by Codex."
+  });
+}
+
+function shouldRequestPagesDispatch(project: Project) {
+  if (!project.pagesDispatchRequestedAt) return true;
+  const requestedAt = new Date(project.pagesDispatchRequestedAt).getTime();
+  if (!Number.isFinite(requestedAt)) return true;
+  return Date.now() - requestedAt > pagesDispatchCooldownMs;
+}
+
+function resolvePagesStatus({
+  pagesStatus,
+  workflowRun,
+  deploymentSha,
+  deploymentRequested
+}: {
+  pagesStatus: string | undefined;
+  workflowRun: Awaited<ReturnType<typeof githubManager.listWorkflowRuns>>[number] | null;
+  deploymentSha?: string;
+  deploymentRequested: boolean;
+}) {
+  if (deploymentRequested) return "publishing";
+  if (!workflowRun) {
+    return deploymentSha ? "publishing" : pagesStatus ?? "publishing";
+  }
+  if (deploymentSha && workflowRun.headSha && workflowRun.headSha !== deploymentSha) {
+    return "publishing";
+  }
+  if (workflowRun.status === "completed") {
+    return workflowRun.conclusion === "success" ? "built" : "errored";
+  }
+  return "publishing";
+}
+
+function workflowFailureDetails(
+  workflowRun: Awaited<ReturnType<typeof githubManager.listWorkflowRuns>>[number] | null,
+  deploymentSha?: string
+) {
+  if (!workflowRun || workflowRun.status !== "completed" || workflowRun.conclusion === "success") return null;
+  if (deploymentSha && workflowRun.headSha && workflowRun.headSha !== deploymentSha) return null;
+  return [
+    `Conclusion: ${workflowRun.conclusion ?? "unknown"}`,
+    workflowRun.htmlUrl ? `Workflow run: ${workflowRun.htmlUrl}` : null
+  ].filter(Boolean).join("\n");
+}
+
+function hasRecordedPagesFailure(project: Project, details: string) {
+  return project.actions.some((action) => {
+    return action.message === "GitHub Pages workflow failed" && action.details === details;
+  });
+}
+
+function pagesWorkflowActionsUrl(project: Project) {
+  if (!project.githubOwner || !project.githubRepo) return undefined;
+  return `https://github.com/${project.githubOwner}/${project.githubRepo}/actions/workflows/${pagesWorkflowFile}`;
 }
 
 function sameFileSet(previousFiles: GeneratedFile[], nextFiles: GeneratedFile[]) {
