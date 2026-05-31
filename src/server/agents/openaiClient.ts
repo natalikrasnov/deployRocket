@@ -32,3 +32,20 @@ export function getOpenAICredentialForRequest() {
     setupInstructions: setupHelp.openaiCustomer
   });
 }
+
+export function getResponseErrorDetails(response: unknown): string | null {
+  if (!response || typeof response !== "object") return null;
+  const res = response as {
+    error?: { code?: string; message?: string } | null;
+    incomplete_details?: { reason?: string } | null;
+  };
+  const parts: string[] = [];
+  if (res.error) {
+    parts.push(`API Error: [${res.error.code ?? "unknown"}] ${res.error.message ?? ""}`);
+  }
+  if (res.incomplete_details?.reason) {
+    parts.push(`Incomplete generation reason: ${res.incomplete_details.reason}`);
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+

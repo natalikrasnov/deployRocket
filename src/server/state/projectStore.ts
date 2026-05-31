@@ -55,19 +55,42 @@ export function projectRepoFromId(id: string) {
 }
 
 class ProjectStore {
+  private initializingProjects = new Map<string, Project>();
+
+  getInitializingProject(id: string) {
+    return this.initializingProjects.get(id);
+  }
+
+  setInitializingProject(id: string, project: Project) {
+    this.initializingProjects.set(id, project);
+  }
+
+  deleteInitializingProject(id: string) {
+    this.initializingProjects.delete(id);
+  }
+
   async listProjects() {
     const repos = await githubManager.listDeployRocketRepositories();
     const projects = await Promise.all(
       repos.map((repo) => this.readProject(repo.owner, repo.repo, repo.branch))
     );
+    const activeProjects = projects.filter((project): project is Project => Boolean(project));
+
+    for (const initProject of this.initializingProjects.values()) {
+      if (!activeProjects.some((p) => p.id === initProject.id)) {
+        activeProjects.push(initProject);
+      }
+    }
+
     return clone(
-      projects
-        .filter((project): project is Project => Boolean(project))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      activeProjects.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     );
   }
 
   async getProject(id: string) {
+    const initializing = this.initializingProjects.get(id);
+    if (initializing) return clone(initializing);
+
     const ref = projectRepoFromId(id);
     if (!ref) return null;
     return this.readProject(ref.owner, ref.repo);
@@ -83,9 +106,9 @@ class ProjectStore {
     const project: Project = {
       id: projectIdFor(repository.owner, repository.repo),
       name: "Untitled project",
-      summary: "Waiting for input processing.",
-      status: "IDLE",
-      currentStep: "Ready",
+      summary: "Initializing project repository...",
+      status: "PROCESSING_INPUT",
+      currentStep: "Initializing",
       githubRepoUrl: repository.url,
       githubOwner: repository.owner,
       githubRepo: repository.repo,
@@ -98,9 +121,9 @@ class ProjectStore {
         {
           id: createId("action"),
           at: now,
-          message: "Received user input",
-          level: "info",
-          status: "IDLE"
+          message: "Created GitHub repository",
+          level: "success",
+          status: "PROCESSING_INPUT"
         }
       ],
       inputs: [input],
@@ -108,7 +131,7 @@ class ProjectStore {
       autoRepairAttempts: []
     };
 
-    await this.writeProject(project, "Initialize deployRocket project dossier");
+    this.initializingProjects.set(project.id, project);
     return clone(project);
   }
 
@@ -275,7 +298,7 @@ class ProjectStore {
     return normalizeLegacyProject(parsed);
   }
 
-  private async writeProject(project: Project, message: string) {
+  async writeProject(project: Project, message: string) {
     if (!project.githubOwner || !project.githubRepo) return;
     await githubManager.putTextFile({
       owner: project.githubOwner,

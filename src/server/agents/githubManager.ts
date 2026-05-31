@@ -111,7 +111,7 @@ interface ApiOptions {
 }
 
 const apiBase = "https://api.github.com";
-const defaultWriteConflictRetries = 4;
+const defaultWriteConflictRetries = 6;
 const defaultRefConflictRetries = 3;
 
 export class GitHubManager {
@@ -907,13 +907,15 @@ function readGithubMessage(payload: unknown, fallback: string) {
 }
 
 export function isGitHubShaConflict(error: unknown) {
-  if (!(error instanceof AppError) || error.statusCode !== 409) return false;
+  if (!(error instanceof AppError)) return false;
+  if (error.statusCode !== 409 && error.statusCode !== 422) return false;
   const text = [error.message, error.details].filter(Boolean).join(" ").toLowerCase();
   return (
     text.includes("expected") ||
     text.includes("sha") ||
     text.includes("conflict") ||
-    text.includes("is at")
+    text.includes("is at") ||
+    text.includes("supplied")
   );
 }
 

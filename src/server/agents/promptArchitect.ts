@@ -2,7 +2,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
 import { AppError } from "../lib/errors.js";
-import { getOpenAIClientForRequest } from "./openaiClient.js";
+import { getOpenAIClientForRequest, getResponseErrorDetails } from "./openaiClient.js";
 import type {
   CodexPromptPlan,
   GeneratedFile,
@@ -84,9 +84,11 @@ export class PromptArchitect {
     }
 
     if (!response.output_parsed) {
+      const errorDetails = getResponseErrorDetails(response);
       throw new AppError("OpenAI returned no Codex prompt plan.", {
         code: "OPENAI_MALFORMED_RESPONSE",
-        statusCode: 502
+        statusCode: 502,
+        details: errorDetails ?? undefined
       });
     }
 

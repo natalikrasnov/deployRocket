@@ -15,7 +15,7 @@ import { createId, nowIso } from "./lib/id.js";
 import { projectStore } from "./state/projectStore.js";
 import { requestContext, setCustomerAccountInContext, setGithubAuthInContext } from "./state/requestContext.js";
 import type { CustomerAccountState, GitHubAuthState } from "./state/authStore.js";
-import type { ProjectInputImage, ProjectInputRecord } from "../shared/types.js";
+import type { ProjectInputImage, ProjectInputRecord, ProjectError } from "../shared/types.js";
 
 const app = express();
 
@@ -260,11 +260,59 @@ app.post("/api/projects", upload.array("images", 4), restoreRequestContext, asyn
   try {
     const input = buildInputRecord("create", req);
     const project = await projectStore.createProject(input);
-    await orchestrator.start(project.id, input.id, "create", githubSessionIdFrom(req));
-    const latest = config.isServerless
-      ? await orchestrator.runNextStep(project.id, githubSessionIdFrom(req))
-      : await projectStore.getProject(project.id);
-    res.status(202).json(latest);
+
+    const context = requestContext.getStore() ?? { github: null, account: null };
+    const githubSessionId = githubSessionIdFrom(req);
+
+    void requestContext.run(context, () => {
+      (async () => {
+        try {
+          // 1. Write the initial project dossier on GitHub
+          await projectStore.writeProject(project, "Initialize deployRocket project dossier");
+          
+          // 2. Start the orchestrator
+          await orchestrator.start(project.id, input.id, "create", githubSessionId);
+          
+          // 3. If serverless, run the first step
+          if (config.isServerless) {
+            await orchestrator.runNextStep(project.id, githubSessionId);
+          }
+        } catch (error) {
+          console.error("Background project initialization failed:", error);
+          
+          const readable = toReadableError(error);
+          const projectError: ProjectError = {
+            message: readable.message,
+            code: readable.code,
+            details: readable.details,
+            setupInstructions: readable.setupInstructions,
+            at: nowIso()
+          };
+          
+          project.status = "FAILED";
+          project.currentStep = "Failed";
+          project.error = projectError;
+          project.actions.push({
+            id: createId("action"),
+            at: nowIso(),
+            message: readable.message,
+            level: "error",
+            status: "FAILED",
+            details: readable.details
+          });
+          
+          try {
+            await projectStore.failProject(project.id, projectError);
+          } catch (failError) {
+            console.error("Failed to write failure state to GitHub:", failError);
+          }
+        } finally {
+          projectStore.deleteInitializingProject(project.id);
+        }
+      })();
+    });
+
+    res.status(202).json(project);
   } catch (error) {
     next(error);
   }

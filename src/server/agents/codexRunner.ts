@@ -2,7 +2,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
 import { AppError } from "../lib/errors.js";
-import { getOpenAIClientForRequest } from "./openaiClient.js";
+import { getOpenAIClientForRequest, getResponseErrorDetails } from "./openaiClient.js";
 import type {
   CodexPromptPlan,
   GeneratedFile,
@@ -138,6 +138,21 @@ export class CodexRunner {
       { signal }
     );
     } catch (error) {
+      const quotaFailure = parseOpenAiQuotaFailure(error);
+
+      if (quotaFailure) {
+        throw new AppError("OpenAI quota exceeded for Codex generation.", {
+          code: "OPENAI_QUOTA_EXCEEDED",
+          statusCode: 402,
+          details: quotaFailure.details,
+          setupInstructions: [
+            "Open deployRocket Settings and verify your OpenAI API key is correct.",
+            "In OpenAI billing, add credits or increase your usage limits for the key you connected.",
+            "After billing is fixed, click Continue Mission to retry generation."
+          ]
+        });
+      }
+
       throw new AppError("Codex returned malformed generated-file JSON.", {
         code: "CODEX_MALFORMED_RESPONSE",
         statusCode: 502,
@@ -225,6 +240,30 @@ export class CodexRunner {
   }
 }
 
+function parseOpenAiQuotaFailure(error: unknown): { details: string } | null {
+  if (!error || typeof error !== "object") return null;
+
+  const candidate = error as {
+    message?: unknown;
+    status?: unknown;
+    code?: unknown;
+    error?: { code?: unknown; message?: unknown; type?: unknown };
+  };
+
+  const status = typeof candidate.status === "number" ? candidate.status : undefined;
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  const nestedCode = typeof candidate.error?.code === "string" ? candidate.error.code : "";
+  const topLevelCode = typeof candidate.code === "string" ? candidate.code : "";
+  const text = [message, nestedCode, topLevelCode].join(" ").toLowerCase();
+  const looksLikeQuota = status === 429 && (text.includes("quota") || text.includes("billing") || text.includes("rate_limit_exceeded"));
+
+  if (!looksLikeQuota) return null;
+
+  return {
+    details: message || "OpenAI returned HTTP 429 due to quota/billing limits."
+  };
+}
+
 
 function compactRequirements(requirements: StructuredRequirements) {
   return {
@@ -255,6 +294,9 @@ function compactPromptPlan(promptPlan: CodexPromptPlan) {
 }
 
 function summarizeResponseText(response: unknown) {
+  const errorDetails = getResponseErrorDetails(response);
+  if (errorDetails) return errorDetails;
+
   const maybeText = response && typeof response === "object" && "output_text" in response
     ? String((response as { output_text?: unknown }).output_text ?? "")
     : "";

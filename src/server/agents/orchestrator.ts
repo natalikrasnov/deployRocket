@@ -152,12 +152,16 @@ export class Orchestrator {
   }
 
   isActive(projectId: string) {
-    return this.activeRuns.has(projectId);
+    return this.activeRuns.has(projectId) || Boolean(projectStore.getInitializingProject(projectId));
   }
 
   async runNextStep(projectId: string, githubSessionId: string) {
     const project = await this.requireProject(projectId);
     if (!projectStore.isRunning(project.status)) return project;
+
+    if (projectStore.getInitializingProject(projectId)) {
+      return project;
+    }
 
     if (!config.isServerless && this.isActive(projectId)) {
       return project;

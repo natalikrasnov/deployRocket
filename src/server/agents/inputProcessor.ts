@@ -3,7 +3,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { config } from "../config.js";
 import { AppError } from "../lib/errors.js";
-import { getOpenAIClientForRequest } from "./openaiClient.js";
+import { getOpenAIClientForRequest, getResponseErrorDetails } from "./openaiClient.js";
 import type { ProjectInputRecord, StructuredRequirements } from "../../shared/types.js";
 
 const StructuredRequirementsSchema = z.object({
@@ -85,9 +85,11 @@ export class InputProcessor {
     }
 
     if (!response.output_parsed) {
+      const errorDetails = getResponseErrorDetails(response);
       throw new AppError("OpenAI returned no structured requirements.", {
         code: "OPENAI_MALFORMED_RESPONSE",
-        statusCode: 502
+        statusCode: 502,
+        details: errorDetails ?? undefined
       });
     }
 
